@@ -8,5 +8,8 @@ contextBridge.exposeInMainWorld('api', {
   baselineWrite: (args) => ipcRenderer.invoke('baseline:write', args),
   baselineRead: (args) => ipcRenderer.invoke('baseline:read', args),
   baselineExists: (args) => ipcRenderer.invoke('baseline:exists', args),
-  savePdf: (args) => ipcRenderer.invoke('report:savePdf', args)
+  savePdf: (args) => ipcRenderer.invoke('report:savePdf', args),
+  perfRun: (cfg) => ipcRenderer.invoke('perf:run', cfg),
+  perfCancel: (runId) => ipcRenderer.invoke('perf:cancel', runId),
+  onPerfTick: (cb) => { ipcRenderer.on('perf:tick', (_e, data) => cb(data)); }
 });

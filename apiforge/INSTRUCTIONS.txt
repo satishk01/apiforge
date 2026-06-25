@@ -119,6 +119,100 @@ Baseline files are plain JSON in the folder you chose, so they can be
 committed to git or shared with teammates.
 
 
+
+PERFORMANCE / LOAD TESTING (NEW)
+--------------------------------
+Goal: simulate many parallel users hitting your endpoints to see how your
+API behaves under load - throughput, response times, percentiles, and
+errors - then export a professional PDF report. This mirrors the
+performance-testing feature in Postman's paid plans.
+
+How it works:
+  Each "virtual user" (VU) runs through all the requests in a collection in
+  a repeating loop. Many VUs run in parallel to create real load. All
+  requests are sent locally from your machine.
+
+The performance screen mirrors Postman's performance tab feature-for-feature.
+
+To run a performance test:
+  1. In the sidebar, click the orange "Perf" button on any collection.
+  2. Configure the test:
+       - Load Profile (Fixed / Ramp Up / Spike / Peak), Virtual Users,
+         and Test Duration in MINUTES.
+       - A live preview graph shows the exact virtual-user shape over time
+         and a plain-English description, updating as you change settings
+         (matches Postman's setup screen).
+       - Profile-specific field: Ramp Up shows "Initial load" (VUs to start
+         with before ramping); Spike and Peak show "Base load" (the low VU
+         level between/around the surge).
+       - Data File (optional): pick a CSV or JSON file to inject different
+         variable values per virtual user. Use {{columnName}} in any request
+         URL, header, or body and each VU substitutes its assigned row.
+         Choose Ordered (VU n uses row n) or Randomized mapping.
+       - Pass test if: metric (avg/p90/p95/p99/error%/req-per-sec) +
+         condition (below/above) + threshold -> sets PASS/FAIL.
+       - Run Sequence: the list of requests each virtual user will run, in
+         order, looping. DRAG rows to reorder, and UNCHECK any request to
+         skip it (just like Postman).
+  3. Click "Run Performance Test".
+
+While it runs (Summary tab), you get:
+  - A header bar: collection, environment, VUs, profile, start time,
+    elapsed/duration, and total requests sent.
+  - One combined real-time graph with FOUR lines: virtual users,
+    requests/sec, response time, and error %. Click any item in the legend
+    below the graph to show/hide that line (toggleable, like Postman).
+  - A "Response time" dropdown to switch the response-time line between
+    Avg / Min / Max / p99 / p95 / p90.
+  - A "Request" dropdown to filter the graph to a single request instead of
+    all requests combined (request drill-down).
+  - A "Stop" button to end the run early, and "Run Again" to reconfigure.
+
+When the run finishes:
+  - Summary tab: PASS/FAIL verdict, metric cards (total requests, req/sec,
+    avg, error rate, min, max, p90, p95, p99), the graph, and a
+    "Metrics for Each Request" table (sorted slowest-first).
+  - Errors tab: error classes (Timeout, Connection refused, DNS, TLS,
+    Connection reset, HTTP 4xx/5xx) each with a count. Click a class to
+    expand it and see which requests hit that error and how often.
+
+Export the PDF report:
+  Click "Download PDF Report". The PDF matches Postman's report contents:
+  config + PASS/FAIL verdict, summary metrics, response-time & throughput
+  charts over time, Slowest Requests, Requests With Most Errors,
+  Metrics for Each Request, and the Errors breakdown by class.
+
+
+NOTE ON ACCURACY (warm-up): Before measurement begins, APIForge sends one
+uncounted "warm-up" request per endpoint. This absorbs one-time cold-start
+costs (DNS lookup, TCP/TLS handshake, server JIT warm-up) that would
+otherwise appear as a single huge Max value and make the report look wrong
+(e.g. Max 2000ms while P99 is 30ms). With warm-up, Min/Max/percentiles all
+reflect steady-state performance.
+
+Metrics explained:
+  - Requests/sec (throughput): how many requests your API served per second.
+  - Avg response time: average over all successful requests, in ms.
+  - p90 / p95 / p99: 90th/95th/99th percentile response times - e.g. p95 =
+    95% of requests were faster than this. Percentiles reveal slow outliers
+    that an average hides.
+  - Error rate: percentage of requests that returned a non-2xx status or
+    failed to connect (timeouts, TLS/connection errors).
+
+Export the PDF report:
+  After the run, click "Download PDF Report". The PDF includes the config,
+  the PASS/FAIL verdict, all summary metrics, the four metric-over-time
+  charts, the per-request breakdown, and the error list - ready to share
+  with stakeholders.
+
+Tips for a fresher team:
+  - Start small (5-10 VUs, 15-30s) to get a feel, then increase.
+  - Use a staging/test environment, NOT production, for heavy load.
+  - Higher VUs use more CPU/network on YOUR machine; if your laptop is the
+    bottleneck the numbers reflect that, not just the API.
+  - Use the regression "Test" button to verify correctness, and "Perf" to
+    verify speed under load - they complement each other.
+
 PDF TEST REPORT (NEW)
 ---------------------
 After running a collection's tests (the green "Test" button), the results

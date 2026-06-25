@@ -760,6 +760,694 @@ async function downloadPdfReport() {
 }
 
 
+// ============ PERFORMANCE TEST (UI) — Postman-faithful ============
+let perfState = null;
+let perfTickHooked = false;
+
+const PERF_SERIES = [
+  { key: 'vus',     label: 'Virtual users',  color: '#a6e3a1', axis: 'count' },
+  { key: 'rps',     label: 'Requests/sec',   color: '#89b4fa', axis: 'rps' },
+  { key: 'rt',      label: 'Response time',  color: '#f9e2af', axis: 'ms' },
+  { key: 'errRate', label: 'Error %',        color: '#f38ba8', axis: 'pct' }
+];
+
+function openPerfModal(col) {
+  perfState = {
+    col, ticks: [], reqTicks: {}, result: null, runId: null,
+    visible: { vus: true, rps: true, rt: true, errRate: true },
+    rtMetric: 'avg', reqFilter: '__all__',
+    dataRows: [], dataFileName: '',
+    sequence: (col.requests || []).map(r => ({ id: r.id, name: r.name, method: r.method, enabled: true }))
+  };
+  document.getElementById('perfTitle').textContent = `Performance Test: ${col.name}`;
+  document.getElementById('perfConfig').classList.remove('hidden');
+  document.getElementById('perfResults').classList.add('hidden');
+  document.getElementById('perfPdfBtn').style.display = 'none';
+  document.getElementById('perfStopBtn').style.display = 'none';
+  document.getElementById('perfRunAgainBtn').style.display = 'none';
+  document.getElementById('perfRunBtn').disabled = false;
+  document.getElementById('perfDataFileInfo').textContent = '';
+  document.getElementById('perfDataMapping').style.display = 'none';
+  renderPerfSequence();
+  updatePerfProfileUI();
+  updatePerfThresholdUnit();
+  document.getElementById('perfModal').classList.remove('hidden');
+  if (!perfTickHooked && window.api.onPerfTick) {
+    window.api.onPerfTick((data) => handlePerfTick(data));
+    perfTickHooked = true;
+  }
+}
+
+// ---- Load-profile preview (matches Postman's config graph) ----
+function perfProfileMeta() {
+  const profile = document.getElementById('perfProfile').value;
+  const vus = Math.max(1, parseInt(document.getElementById('perfVus').value) || 1);
+  const mins = Math.max(1, parseInt(document.getElementById('perfDuration').value) || 1);
+  const baseInput = document.getElementById('perfBaseLoad');
+  const extra = baseInput ? Math.max(1, Math.min(vus, parseInt(baseInput.value) || 1)) : 1;
+  return { profile, vus, mins, extra };
+}
+
+// recompute VU shape locally (mirror of main process vuCountAt)
+function previewVuAt(t, vus, profile, opts) {
+  const base = Math.max(1, Math.min(vus, opts.baseLoad || Math.max(1, Math.round(vus * 0.2))));
+  const initial = Math.max(1, Math.min(vus, opts.initialLoad || Math.max(1, Math.round(vus * 0.25))));
+  const lerp = (a, b, f) => a + (b - a) * f;
+  switch (profile) {
+    case 'rampup':
+      if (t < 0.25) return initial;
+      if (t < 0.50) return lerp(initial, vus, (t - 0.25) / 0.25);
+      return vus;
+    case 'spike':
+      if (t < 0.40) return base;
+      if (t < 0.50) return lerp(base, vus, (t - 0.40) / 0.10);
+      if (t < 0.60) return lerp(vus, base, (t - 0.50) / 0.10);
+      return base;
+    case 'peak':
+      if (t < 0.20) return base;
+      if (t < 0.40) return lerp(base, vus, (t - 0.20) / 0.20);
+      if (t < 0.60) return vus;
+      if (t < 0.80) return lerp(vus, base, (t - 0.60) / 0.20);
+      return base;
+    default: return vus;
+  }
+}
+
+function updatePerfProfileUI() {
+  const { profile, vus, mins, extra } = perfProfileMeta();
+  const fieldWrap = document.getElementById('perfProfileField');
+  const fieldLabel = document.getElementById('perfProfileFieldLabel');
+  // show base/initial field per profile
+  if (profile === 'rampup') { fieldWrap.style.display = ''; fieldLabel.textContent = 'Initial load'; }
+  else if (profile === 'spike' || profile === 'peak') { fieldWrap.style.display = ''; fieldLabel.textContent = 'Base load'; }
+  else { fieldWrap.style.display = 'none'; }
+
+  const opts = profile === 'rampup' ? { initialLoad: extra } : { baseLoad: extra };
+  // draw preview
+  const w = 720, h = 180, pad = { l: 40, r: 14, t: 18, b: 24 };
+  const innerW = w - pad.l - pad.r, innerH = h - pad.t - pad.b;
+  const N = 100;
+  const pts = [];
+  for (let i = 0; i <= N; i++) {
+    const t = i / N;
+    const v = previewVuAt(t, vus, profile, opts);
+    const x = pad.l + t * innerW;
+    const y = pad.t + innerH - (v / vus) * innerH;
+    pts.push(`${x.toFixed(1)},${y.toFixed(1)}`);
+  }
+  const area = `M ${pad.l},${pad.t + innerH} L ` + pts.join(' L ') + ` L ${pad.l + innerW},${pad.t + innerH} Z`;
+  let svg = `<svg viewBox="0 0 ${w} ${h}" style="width:100%;height:${h}px;display:block" preserveAspectRatio="none">`;
+  svg += `<text x="${pad.l}" y="12" font-size="10" fill="var(--muted)">${vus} VUs</text>`;
+  svg += `<line x1="${pad.l}" y1="${pad.t}" x2="${pad.l}" y2="${pad.t + innerH}" stroke="var(--border)"/>`;
+  svg += `<line x1="${pad.l}" y1="${pad.t + innerH}" x2="${w - pad.r}" y2="${pad.t + innerH}" stroke="var(--border)"/>`;
+  svg += `<path d="${area}" fill="var(--accent)" opacity="0.15"/>`;
+  svg += `<polyline points="${pts.join(' ')}" fill="none" stroke="var(--accent)" stroke-width="2"/>`;
+  svg += `<text x="${pad.l}" y="${h - 6}" font-size="9" fill="var(--muted)">0</text>`;
+  svg += `<text x="${w - pad.r}" y="${h - 6}" font-size="9" fill="var(--muted)" text-anchor="end">${mins} min${mins > 1 ? 's' : ''}</text>`;
+  svg += `</svg>`;
+  document.getElementById('perfPreviewChart').innerHTML = svg;
+  document.getElementById('perfPreviewDesc').textContent = perfProfileDescription(profile, vus, mins, extra);
+}
+
+// Postman-style plain-English description of the load shape
+function perfProfileDescription(profile, vus, mins, extra) {
+  const m = (f) => {
+    const v = +(mins * f).toFixed(2);
+    return Number.isInteger(v) ? `${v} minute${v === 1 ? '' : 's'}` : `${v} minutes`;
+  };
+  switch (profile) {
+    case 'fixed':
+      return `${vus} virtual users run for ${mins} minute${mins > 1 ? 's' : ''}, each executing all requests sequentially.`;
+    case 'rampup':
+      return `${extra} virtual users run for ${m(0.25)}, ramp up to ${vus} for ${m(0.25)}, then maintain ${vus} for ${m(0.5)}, each executing all requests sequentially.`;
+    case 'spike':
+      return `${extra} virtual users run for ${m(0.4)}, spike to ${vus} over ${m(0.1)}, drop to ${extra} over ${m(0.1)}, maintain ${extra} for ${m(0.4)}, each executing all requests sequentially.`;
+    case 'peak':
+      return `${extra} virtual users run for ${m(0.2)}, ramp up to ${vus} over ${m(0.2)}, maintain ${vus} for ${m(0.2)}, decrease to ${extra} over ${m(0.2)}, maintain ${extra} for ${m(0.2)}, each executing all requests sequentially.`;
+    default: return '';
+  }
+}
+
+function updatePerfThresholdUnit() {
+  const metric = document.getElementById('perfMetric').value;
+  document.getElementById('perfThresholdUnit').textContent = metric === 'errorRate' ? '%' : (metric === 'rps' ? '/s' : 'ms');
+}
+
+// ---- Data file parsing ----
+function parsePerfDataFile(name, text) {
+  const rows = [];
+  if (name.toLowerCase().endsWith('.json')) {
+    const arr = JSON.parse(text);
+    if (Array.isArray(arr)) arr.forEach(o => { if (o && typeof o === 'object') rows.push(o); });
+  } else {
+    // CSV: first row headers
+    const lines = text.split(/\r?\n/).filter(l => l.trim().length);
+    if (lines.length) {
+      const headers = splitCsvLine(lines[0]);
+      for (let i = 1; i < lines.length; i++) {
+        const cells = splitCsvLine(lines[i]);
+        const row = {};
+        headers.forEach((h, idx) => { row[h.trim()] = (cells[idx] != null ? cells[idx] : '').trim(); });
+        rows.push(row);
+      }
+    }
+  }
+  return rows;
+}
+function splitCsvLine(line) {
+  const out = []; let cur = '', inQ = false;
+  for (let i = 0; i < line.length; i++) {
+    const ch = line[i];
+    if (ch === '"') { if (inQ && line[i + 1] === '"') { cur += '"'; i++; } else inQ = !inQ; }
+    else if (ch === ',' && !inQ) { out.push(cur); cur = ''; }
+    else cur += ch;
+  }
+  out.push(cur);
+  return out;
+}
+
+
+function renderPerfSequence() {
+  const list = document.getElementById('perfSeqList');
+  list.innerHTML = '';
+  perfState.sequence.forEach((item, idx) => {
+    const row = document.createElement('div');
+    row.className = 'perf-seq-item';
+    row.draggable = true;
+    row.dataset.idx = idx;
+    row.innerHTML = `<span class="perf-seq-grip">⋮⋮</span>
+      <input type="checkbox" ${item.enabled ? 'checked' : ''}>
+      <span class="req-method m-${item.method}">${item.method}</span>
+      <span class="perf-seq-name">${escapeHtml(item.name)}</span>
+      <span class="perf-seq-order">${idx + 1}</span>`;
+    row.querySelector('input').onchange = (e) => { item.enabled = e.target.checked; };
+    row.addEventListener('dragstart', (e) => { e.dataTransfer.setData('text/plain', idx); row.classList.add('dragging'); });
+    row.addEventListener('dragend', () => row.classList.remove('dragging'));
+    row.addEventListener('dragover', (e) => e.preventDefault());
+    row.addEventListener('drop', (e) => {
+      e.preventDefault();
+      const from = parseInt(e.dataTransfer.getData('text/plain'));
+      const to = idx;
+      if (from === to) return;
+      const moved = perfState.sequence.splice(from, 1)[0];
+      perfState.sequence.splice(to, 0, moved);
+      renderPerfSequence();
+    });
+    list.appendChild(row);
+  });
+}
+
+function handlePerfTick(data) {
+  if (!perfState || !perfState.runId || data.runId !== perfState.runId) return;
+  perfState.ticks.push(data.snap);
+  if (data.perReqSnap) {
+    Object.entries(data.perReqSnap).forEach(([rid, pt]) => {
+      if (!perfState.reqTicks[rid]) perfState.reqTicks[rid] = [];
+      perfState.reqTicks[rid].push(pt);
+    });
+  }
+  renderPerfLive(false);
+}
+
+// Resolve the chart series values for current request-filter + rt-metric.
+function perfChartData() {
+  const filter = perfState.reqFilter;
+  const rtMetric = perfState.rtMetric;
+  let source, vusSource;
+  if (filter === '__all__') { source = perfState.ticks; vusSource = perfState.ticks; }
+  else { source = perfState.reqTicks[filter] || []; vusSource = perfState.ticks; }
+  const series = {
+    vus: vusSource.map(t => t.vus),
+    rps: source.map(t => t.rps),
+    rt: source.map(t => (t[rtMetric] != null ? t[rtMetric] : t.avg)),
+    errRate: source.map(t => t.errRate)
+  };
+  const tAxis = source.map(t => t.t);
+  return { series, tAxis };
+}
+
+function multiLineChart(series, tAxis, visible, w, h) {
+  const pad = { l: 6, r: 6, t: 8, b: 16 };
+  const innerW = w - pad.l - pad.r, innerH = h - pad.t - pad.b;
+  const active = PERF_SERIES.filter(s => visible[s.key]);
+  // normalize each series to its own max so all fit one panel
+  const maxes = {};
+  PERF_SERIES.forEach(s => { const arr = series[s.key] || []; maxes[s.key] = Math.max(1, ...arr); });
+  // error% always 0..100 scale
+  maxes.errRate = 100;
+  const n = Math.max(1, tAxis.length);
+  const xStep = n > 1 ? innerW / (n - 1) : 0;
+  let svg = `<svg viewBox="0 0 ${w} ${h}" preserveAspectRatio="none" style="width:100%;height:${h}px;display:block">`;
+  // gridlines
+  for (let g = 0; g <= 4; g++) {
+    const y = pad.t + (innerH / 4) * g;
+    svg += `<line x1="${pad.l}" y1="${y.toFixed(1)}" x2="${w - pad.r}" y2="${y.toFixed(1)}" stroke="var(--border)" stroke-width="0.5"/>`;
+  }
+  active.forEach(s => {
+    const arr = series[s.key] || [];
+    if (!arr.length) return;
+    const mx = maxes[s.key];
+    const pts = arr.map((v, i) => {
+      const x = pad.l + i * xStep;
+      const y = pad.t + innerH - (v / mx) * innerH;
+      return `${x.toFixed(1)},${y.toFixed(1)}`;
+    });
+    svg += `<polyline points="${pts.join(' ')}" fill="none" stroke="${s.color}" stroke-width="2"/>`;
+    // last-point dot
+    const last = pts[pts.length - 1].split(',');
+    svg += `<circle cx="${last[0]}" cy="${last[1]}" r="2.5" fill="${s.color}"/>`;
+  });
+  // x labels (start / mid / end seconds)
+  if (tAxis.length) {
+    const labels = [tAxis[0], tAxis[Math.floor(tAxis.length / 2)], tAxis[tAxis.length - 1]];
+    [0, 0.5, 1].forEach((f, i) => {
+      const x = pad.l + f * innerW;
+      svg += `<text x="${x.toFixed(1)}" y="${h - 3}" font-size="8" fill="var(--muted)" text-anchor="${i === 0 ? 'start' : i === 2 ? 'end' : 'middle'}">${labels[i]}s</text>`;
+    });
+  }
+  svg += `</svg>`;
+  return svg;
+}
+
+function renderPerfLegend() {
+  const last = perfState.ticks[perfState.ticks.length - 1] || {};
+  const filter = perfState.reqFilter;
+  const reqLast = (filter !== '__all__' && perfState.reqTicks[filter]) ? perfState.reqTicks[filter][perfState.reqTicks[filter].length - 1] || {} : last;
+  const rtMetric = perfState.rtMetric;
+  const valFor = (key) => {
+    if (key === 'vus') return last.vus != null ? last.vus : 0;
+    if (key === 'rps') return reqLast.rps != null ? reqLast.rps : 0;
+    if (key === 'rt') return (reqLast[rtMetric] != null ? reqLast[rtMetric] : reqLast.avg) || 0;
+    if (key === 'errRate') return reqLast.errRate != null ? reqLast.errRate : 0;
+    return 0;
+  };
+  const unit = (key) => key === 'rt' ? ' ms' : (key === 'errRate' ? '%' : (key === 'rps' ? '/s' : ''));
+  const legend = document.getElementById('perfLegend');
+  legend.innerHTML = PERF_SERIES.map(s => {
+    const on = perfState.visible[s.key];
+    const lbl = s.key === 'rt' ? `Response time (${rtMetric})` : s.label;
+    return `<span class="perf-legend-item ${on ? '' : 'off'}" data-key="${s.key}">
+      <span class="perf-legend-dot" style="background:${s.color}"></span>${lbl}
+      <b style="color:${s.color}">${valFor(s.key)}${unit(s.key)}</b></span>`;
+  }).join('');
+  legend.querySelectorAll('.perf-legend-item').forEach(el => {
+    el.onclick = () => { const k = el.dataset.key; perfState.visible[k] = !perfState.visible[k]; renderPerfLive(true); };
+  });
+}
+
+function renderPerfLive(redrawLegend) {
+  const { series, tAxis } = perfChartData();
+  document.getElementById('perfBigChart').innerHTML = multiLineChart(series, tAxis, perfState.visible, 760, 260);
+  renderPerfLegend();
+  const last = perfState.ticks[perfState.ticks.length - 1] || { t: 0, totalRequests: 0 };
+  const cfg = perfState.config || { durationSec: 0, profile: '' };
+  document.getElementById('perfHeadbar').innerHTML = perfHeadbarHtml(last);
+}
+
+function perfHeadbarHtml(last) {
+  const cfg = perfState.config || {};
+  const started = perfState.startedAt ? fmtDateTime(perfState.startedAt) : '';
+  return `<div class="perf-hb-row">
+      <span><b>${escapeHtml(perfState.col.name)}</b></span>
+      <span class="muted2">Env: ${escapeHtml(perfState.envName || 'None')}</span>
+      <span class="muted2">VUs: ${cfg.vus}</span>
+      <span class="muted2">Profile: ${cfg.profile}</span>
+      <span class="muted2">Start: ${started}</span>
+      <span class="muted2">Elapsed: ${last.t || 0}s / ${cfg.durationSec}s</span>
+      <span class="muted2">Total requests: ${last.totalRequests || 0}</span>
+    </div>`;
+}
+
+async function runPerfTest() {
+  const col = perfState.col;
+  const seq = perfState.sequence.filter(s => s.enabled);
+  if (!seq.length) { await dialogConfirm('No Requests', 'Select at least one request in the run sequence.'); return; }
+
+  const vus = Math.max(1, parseInt(document.getElementById('perfVus').value) || 10);
+  const durationMin = Math.max(1, parseInt(document.getElementById('perfDuration').value) || 2);
+  const durationSec = durationMin * 60;
+  const profile = document.getElementById('perfProfile').value;
+  const baseInput = document.getElementById('perfBaseLoad');
+  const extra = baseInput ? Math.max(1, Math.min(vus, parseInt(baseInput.value) || 1)) : undefined;
+  const baseLoad = (profile === 'spike' || profile === 'peak') ? extra : undefined;
+  const initialLoad = (profile === 'rampup') ? extra : undefined;
+  const dataRows = perfState.dataRows || [];
+  const dataMapping = document.getElementById('perfDataMapping').value || 'ordered';
+  const threshold = {
+    metric: document.getElementById('perfMetric').value,
+    condition: document.getElementById('perfCondition').value,
+    value: parseFloat(document.getElementById('perfThreshold').value)
+  };
+
+  // resolve requests in the chosen sequence order
+  const byId = {}; (col.requests || []).forEach(r => byId[r.id] = r);
+  const resolved = seq.map(s => {
+    const r = byId[s.id];
+    return { id: r.id, name: r.name, method: r.method, url: buildUrl(r), headers: buildHeaders(r), body: buildBody(r) };
+  });
+
+  const runId = 'perf_' + uid();
+  perfState.runId = runId;
+  perfState.ticks = []; perfState.reqTicks = {};
+  perfState.config = { vus, durationSec, durationMin, profile, threshold, baseLoad, initialLoad, dataRows: dataRows.length };
+  perfState.startedAt = Date.now();
+  perfState.envName = (store.environments.find(e => e.id === store.activeEnv) || {}).name || 'None';
+
+  // populate request filter dropdown
+  const filterSel = document.getElementById('perfReqFilter');
+  filterSel.innerHTML = '<option value="__all__">All requests</option>' +
+    resolved.map(r => `<option value="${r.id}">${escapeHtml(r.name)}</option>`).join('');
+
+  document.getElementById('perfConfig').classList.add('hidden');
+  document.getElementById('perfResults').classList.remove('hidden');
+  document.getElementById('perfStopBtn').style.display = '';
+  document.getElementById('perfRunAgainBtn').style.display = 'none';
+  document.getElementById('perfPdfBtn').style.display = 'none';
+  document.getElementById('perfVerdict').innerHTML = '<span class="perf-running">● Running…</span>';
+  document.getElementById('perfCards').innerHTML = '';
+  document.getElementById('perfTable').innerHTML = '';
+  document.getElementById('perfErrorsContent').innerHTML = '';
+  document.getElementById('perfErrTabCount').textContent = '';
+  switchPerfTab('summary');
+  renderPerfLive(true);
+
+  const result = await window.api.perfRun({ runId, requests: resolved, vus, durationSec, profile, baseLoad, initialLoad, dataRows, dataMapping });
+  perfState.result = result;
+  renderPerfFinal(result, threshold);
+}
+
+function evalThreshold(summary, threshold) {
+  const actual = summary[threshold.metric];
+  const pass = threshold.condition === 'lt' ? actual < threshold.value : actual > threshold.value;
+  return { pass, actual };
+}
+function metricLabel(m) { return { avg: 'Avg response time', p90: 'p90', p95: 'p95', p99: 'p99', errorRate: 'Error %', rps: 'Requests/sec' }[m] || m; }
+function metricUnit(m) { return (m === 'errorRate') ? '%' : (m === 'rps' ? '/s' : ' ms'); }
+
+function switchPerfTab(tab) {
+  document.querySelectorAll('.perf-tab').forEach(b => b.classList.toggle('active', b.dataset.ptab === tab));
+  document.getElementById('perfTabSummary').classList.toggle('active', tab === 'summary');
+  document.getElementById('perfTabErrors').classList.toggle('active', tab === 'errors');
+}
+
+function renderPerfFinal(result, threshold) {
+  const s = result.summary;
+  const verdict = evalThreshold(s, threshold);
+  const condText = threshold.condition === 'lt' ? '<' : '>';
+  document.getElementById('perfStopBtn').style.display = 'none';
+  document.getElementById('perfRunAgainBtn').style.display = '';
+  document.getElementById('perfVerdict').innerHTML =
+    `<span class="perf-verdict-badge ${verdict.pass ? 'pass' : 'fail'}">${verdict.pass ? '✓ PASSED' : '✗ FAILED'}</span>
+     <span class="muted2">Condition: ${metricLabel(threshold.metric)} ${condText} ${threshold.value}${metricUnit(threshold.metric)} — actual ${verdict.actual}${metricUnit(threshold.metric)}</span>`;
+
+  const card = (n, l, cls) => `<div class="perf-card ${cls||''}"><div class="pn">${n}</div><div class="pl">${l}</div></div>`;
+  document.getElementById('perfCards').innerHTML =
+    card(s.totalRequests, 'Total Requests') +
+    card(s.rps, 'Requests/sec', 'blue') +
+    card(s.avg + ' ms', 'Avg Response') +
+    card(s.errorRate + '%', 'Error Rate', s.errorRate > 0 ? 'red' : 'green') +
+    card(s.min + ' ms', 'Min') + card(s.max + ' ms', 'Max') +
+    card(s.p90 + ' ms', 'p90') + card(s.p95 + ' ms', 'p95') + card(s.p99 + ' ms', 'p99');
+
+  renderPerfTable(result);
+  renderPerfErrors(result);
+  renderPerfLive(true);
+
+  const last = perfState.ticks[perfState.ticks.length - 1] || { t: s.wallSec, totalRequests: s.totalRequests };
+  document.getElementById('perfHeadbar').innerHTML = perfHeadbarHtml(last);
+
+  const pdfBtn = document.getElementById('perfPdfBtn');
+  pdfBtn.style.display = ''; pdfBtn.disabled = false; pdfBtn.textContent = '⬇ Download PDF Report';
+}
+
+function renderPerfTable(result) {
+  // sort: slowest first (by p95) to surface bottlenecks like Postman
+  const rows = [...result.perRequest].sort((a, b) => b.p95 - a.p95).map(r => `<tr>
+    <td class="pr-name">${escapeHtml(r.name)}</td>
+    <td><span class="req-method m-${r.method}">${r.method}</span></td>
+    <td class="num">${r.count}</td>
+    <td class="num">${r.avg}</td>
+    <td class="num">${r.min}</td>
+    <td class="num">${r.max}</td>
+    <td class="num">${r.p90}</td>
+    <td class="num">${r.p95}</td>
+    <td class="num">${r.p99}</td>
+    <td class="num ${r.errorRate > 0 ? 'err' : ''}">${r.errorRate}%</td>
+  </tr>`).join('');
+  document.getElementById('perfTable').innerHTML =
+    `<table class="perf-rtable"><thead><tr>
+      <th>Request</th><th>Method</th><th>Count</th><th>Avg</th><th>Min</th><th>Max</th><th>p90</th><th>p95</th><th>p99</th><th>Err%</th>
+    </tr></thead><tbody>${rows}</tbody></table>`;
+}
+
+function renderPerfErrors(result) {
+  const classes = result.errorClasses || {};
+  const keys = Object.keys(classes);
+  const totalErr = result.summary.totalErrors;
+  document.getElementById('perfErrTabCount').textContent = totalErr ? `(${totalErr})` : '';
+  if (!keys.length) {
+    document.getElementById('perfErrorsContent').innerHTML = '<div class="perf-noerr">✓ No errors occurred during this test.</div>';
+    return;
+  }
+  // top errors summary + expandable classes
+  const sorted = keys.sort((a, b) => classes[b].count - classes[a].count);
+  const html = sorted.map((cls, ci) => {
+    const c = classes[cls];
+    const reqRows = Object.entries(c.byRequest).sort((a, b) => b[1] - a[1])
+      .map(([req, n]) => `<div class="perf-err-req"><span class="perf-err-count">${n}×</span> ${escapeHtml(req)}</div>`).join('');
+    return `<div class="perf-err-class">
+      <div class="perf-err-class-head" data-ec="${ci}">
+        <span class="perf-err-caret">▸</span>
+        <span class="perf-err-class-name">${escapeHtml(cls)}</span>
+        <span class="perf-err-class-count">${c.count} occurrence${c.count > 1 ? 's' : ''}</span>
+      </div>
+      <div class="perf-err-class-body" id="ec${ci}" style="display:none">${reqRows}</div>
+    </div>`;
+  }).join('');
+  document.getElementById('perfErrorsContent').innerHTML =
+    `<div class="perf-section-title">Error Classes (${totalErr} total errors across ${keys.length} class${keys.length>1?'es':''})</div>${html}`;
+  document.querySelectorAll('.perf-err-class-head').forEach(h => h.onclick = () => {
+    const body = document.getElementById('ec' + h.dataset.ec);
+    const open = body.style.display !== 'none';
+    body.style.display = open ? 'none' : 'block';
+    h.querySelector('.perf-err-caret').textContent = open ? '▸' : '▾';
+  });
+}
+
+
+function perfInterpretation(s, verdict, cfg) {
+  const parts = [];
+  parts.push(verdict.pass
+    ? `The API met the performance target (${metricLabel(cfg.threshold.metric)} ${cfg.threshold.condition === 'lt' ? 'below' : 'above'} ${cfg.threshold.value}${metricUnit(cfg.threshold.metric)}).`
+    : `The API did not meet the performance target (${metricLabel(cfg.threshold.metric)} ${cfg.threshold.condition === 'lt' ? 'below' : 'above'} ${cfg.threshold.value}${metricUnit(cfg.threshold.metric)}; actual ${verdict.actual}${metricUnit(cfg.threshold.metric)}).`);
+  parts.push(`Under ${cfg.vus} virtual user${cfg.vus > 1 ? 's' : ''} for ${s.wallSec}s, the API served ${s.totalRequests.toLocaleString()} requests at ${s.rps} req/s.`);
+  parts.push(s.errorRate > 0
+    ? `${s.errorRate}% of requests resulted in an error.`
+    : `No errors were observed.`);
+  parts.push(`Typical latency was ${s.avg} ms (p95 ${s.p95} ms, p99 ${s.p99} ms).`);
+  return parts.join(' ');
+}
+
+function buildPerfReportHtml() {
+  const r = perfState.result; const cfg = perfState.config;
+  const s = r.summary;
+  const verdict = evalThreshold(s, cfg.threshold);
+  const condText = cfg.threshold.condition === 'lt' ? '<' : '>';
+  const profileLabel = { fixed: 'Fixed', rampup: 'Ramp Up', spike: 'Spike', peak: 'Peak' }[cfg.profile] || cfg.profile;
+  const profileExtra = cfg.profile === 'rampup' && cfg.initialLoad ? ` (initial ${cfg.initialLoad})`
+    : (cfg.profile === 'spike' || cfg.profile === 'peak') && cfg.baseLoad ? ` (base ${cfg.baseLoad})` : '';
+  const dataFileNote = cfg.dataRows ? ` · ${cfg.dataRows} data rows` : '';
+
+  // combined multi-line chart with legend (matches the in-app + Postman style)
+  const combinedChart = () => {
+    const ticks = r.timeline;
+    if (!ticks.length) return '';
+    const w = 1040, h = 230, pad = { l: 44, r: 16, t: 14, b: 26 };
+    const innerW = w - pad.l - pad.r, innerH = h - pad.t - pad.b;
+    const n = ticks.length, xStep = n > 1 ? innerW / (n - 1) : 0;
+    const series = [
+      { key: 'rps', label: 'Requests/sec', color: '#2563eb', max: Math.max(1, ...ticks.map(t => t.rps)) },
+      { key: 'avg', label: 'Avg response (ms)', color: '#d97706', max: Math.max(1, ...ticks.map(t => t.avg)) },
+      { key: 'errRate', label: 'Error %', color: '#dc2626', max: 100 },
+      { key: 'vus', label: 'Virtual users', color: '#16a34a', max: cfg.vus }
+    ];
+    let svg = `<svg viewBox="0 0 ${w} ${h}" style="width:100%;height:230px;display:block" preserveAspectRatio="none">`;
+    // y gridlines + frame
+    for (let g = 0; g <= 4; g++) {
+      const y = pad.t + (innerH / 4) * g;
+      svg += `<line x1="${pad.l}" y1="${y.toFixed(1)}" x2="${w - pad.r}" y2="${y.toFixed(1)}" stroke="#e2e8f0" stroke-width="1"/>`;
+      svg += `<text x="${pad.l - 6}" y="${(y + 3).toFixed(1)}" font-size="9" fill="#94a3b8" text-anchor="end">${Math.round((1 - g / 4) * 100)}%</text>`;
+    }
+    series.forEach(se => {
+      const pts = ticks.map((t, i) => {
+        const v = t[se.key] || 0;
+        const x = pad.l + i * xStep;
+        const y = pad.t + innerH - (v / se.max) * innerH;
+        return `${x.toFixed(1)},${y.toFixed(1)}`;
+      });
+      svg += `<polyline points="${pts.join(' ')}" fill="none" stroke="${se.color}" stroke-width="2"/>`;
+    });
+    // x labels
+    const lab = [0, 0.25, 0.5, 0.75, 1];
+    lab.forEach(f => {
+      const i = Math.round(f * (n - 1));
+      const x = pad.l + i * xStep;
+      svg += `<text x="${x.toFixed(1)}" y="${h - 8}" font-size="9" fill="#94a3b8" text-anchor="middle">${ticks[i].t}s</text>`;
+    });
+    svg += `</svg>`;
+    const legend = series.map(se => `<span class="lg"><span class="lg-dot" style="background:${se.color}"></span>${se.label}</span>`).join('');
+    return `<div class="combo-chart">${svg}<div class="combo-legend">${legend}</div></div>`;
+  };
+
+  const slowest = [...r.perRequest].sort((a, b) => b.p95 - a.p95).slice(0, 5);
+  const mostErrors = [...r.perRequest].filter(p => p.errors > 0).sort((a, b) => b.errors - a.errors).slice(0, 5);
+
+  const prRows = [...r.perRequest].sort((a, b) => b.p95 - a.p95).map((p, i) => `<tr class="${i % 2 ? 'odd' : ''}">
+    <td class="nm">${esc(p.name)}</td><td><span class="method m-${p.method}">${esc(p.method)}</span></td>
+    <td class="num">${p.count.toLocaleString()}</td><td class="num">${p.avg}</td><td class="num">${p.min}</td><td class="num">${p.max}</td>
+    <td class="num">${p.p90}</td><td class="num strong">${p.p95}</td><td class="num">${p.p99}</td>
+    <td class="num ${p.errorRate > 0 ? 'bad' : 'good'}">${p.errorRate}%</td></tr>`).join('');
+
+  const slowRows = slowest.map((p, i) => `<tr class="${i % 2 ? 'odd' : ''}"><td class="rank">${i + 1}</td><td class="nm">${esc(p.name)}</td><td class="num">${p.avg}</td><td class="num strong">${p.p95}</td><td class="num">${p.max}</td></tr>`).join('');
+  const errReqRows = mostErrors.length
+    ? mostErrors.map((p, i) => `<tr class="${i % 2 ? 'odd' : ''}"><td class="rank">${i + 1}</td><td class="nm">${esc(p.name)}</td><td class="num">${p.errors}</td><td class="num bad">${p.errorRate}%</td></tr>`).join('')
+    : '<tr><td colspan="4" class="empty">✓ No errors occurred during this test.</td></tr>';
+
+  let errClassBlock = '';
+  const classes = r.errorClasses || {};
+  if (Object.keys(classes).length) {
+    const crows = Object.entries(classes).sort((a, b) => b[1].count - a[1].count).map(([cls, c], i) => {
+      const reqs = Object.entries(c.byRequest).sort((a, b) => b[1] - a[1]).map(([rq, n]) => `${esc(rq)} (${n})`).join(', ');
+      return `<tr class="${i % 2 ? 'odd' : ''}"><td class="nm">${esc(cls)}</td><td class="num">${c.count}</td><td class="affected">${reqs}</td></tr>`;
+    }).join('');
+    errClassBlock = `<h2>Error Breakdown</h2><table class="grid"><thead><tr><th>Error Class</th><th class="num">Count</th><th>Affected Requests</th></tr></thead><tbody>${crows}</tbody></table>`;
+  }
+
+  const stat = (label, val, sub) => `<div class="stat"><div class="stat-l">${label}</div><div class="stat-v">${val}</div>${sub ? `<div class="stat-s">${sub}</div>` : ''}</div>`;
+
+  return `<!DOCTYPE html><html><head><meta charset="utf-8"><style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: -apple-system, 'Segoe UI', Roboto, Arial, sans-serif; color: #0f172a; padding: 34px 38px; font-size: 12px; line-height: 1.45; }
+    .header { display: flex; justify-content: space-between; align-items: flex-start; border-bottom: 2px solid #1e293b; padding-bottom: 16px; margin-bottom: 18px; }
+    .brand { color: #2563eb; font-size: 19px; font-weight: 800; letter-spacing: -0.3px; }
+    .doc-title { font-size: 15px; font-weight: 600; color: #334155; margin-top: 2px; }
+    .header-right { text-align: right; font-size: 10.5px; color: #64748b; line-height: 1.7; }
+    .header-right b { color: #334155; }
+    .verdict-bar { display: flex; align-items: center; gap: 14px; padding: 12px 16px; border-radius: 10px; margin-bottom: 16px; }
+    .verdict-bar.pass { background: #f0fdf4; border: 1px solid #bbf7d0; }
+    .verdict-bar.fail { background: #fef2f2; border: 1px solid #fecaca; }
+    .verdict-tag { font-size: 14px; font-weight: 800; padding: 4px 14px; border-radius: 8px; white-space: nowrap; }
+    .verdict-bar.pass .verdict-tag { background: #16a34a; color: #fff; }
+    .verdict-bar.fail .verdict-tag { background: #dc2626; color: #fff; }
+    .verdict-text { font-size: 11.5px; color: #475569; }
+    .verdict-text b { color: #0f172a; }
+    .stat-strip { display: flex; gap: 0; border: 1px solid #e2e8f0; border-radius: 10px; overflow: hidden; margin-bottom: 22px; }
+    .stat { flex: 1; padding: 12px 10px; text-align: center; border-right: 1px solid #e2e8f0; }
+    .stat:last-child { border-right: none; }
+    .stat-l { font-size: 9px; text-transform: uppercase; letter-spacing: 0.6px; color: #94a3b8; font-weight: 600; }
+    .stat-v { font-size: 19px; font-weight: 800; color: #0f172a; margin-top: 3px; }
+    .stat-s { font-size: 9px; color: #94a3b8; margin-top: 1px; }
+    h2 { font-size: 12.5px; font-weight: 700; color: #1e293b; text-transform: uppercase; letter-spacing: 0.4px; margin: 22px 0 10px; padding-bottom: 6px; border-bottom: 1px solid #e2e8f0; }
+    .combo-chart { border: 1px solid #e2e8f0; border-radius: 10px; padding: 12px 14px 6px; }
+    .combo-legend { display: flex; gap: 20px; justify-content: center; padding-top: 8px; }
+    .lg { font-size: 10.5px; color: #475569; display: flex; align-items: center; gap: 6px; }
+    .lg-dot { width: 14px; height: 3px; border-radius: 2px; }
+    .two-col { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; }
+    table.grid { width: 100%; border-collapse: collapse; border: 1px solid #e2e8f0; border-radius: 8px; overflow: hidden; }
+    table.grid thead th { background: #f8fafc; padding: 8px 10px; font-size: 9.5px; text-transform: uppercase; letter-spacing: 0.4px; color: #64748b; font-weight: 700; text-align: left; border-bottom: 1px solid #e2e8f0; }
+    table.grid thead th.num { text-align: right; }
+    table.grid td { padding: 7px 10px; border-bottom: 1px solid #f1f5f9; }
+    table.grid tr.odd td { background: #fafbfc; }
+    table.grid tr:last-child td { border-bottom: none; }
+    td.num { text-align: right; font-variant-numeric: tabular-nums; }
+    td.nm { font-weight: 600; color: #1e293b; }
+    td.rank { color: #94a3b8; font-weight: 700; width: 28px; }
+    td.strong { font-weight: 700; color: #0f172a; }
+    td.good { color: #16a34a; } td.bad { color: #dc2626; font-weight: 600; }
+    td.empty { color: #16a34a; padding: 14px; text-align: center; }
+    td.affected { color: #475569; font-size: 11px; }
+    .method { font-weight: 700; font-size: 10px; }
+    .m-GET { color: #16a34a; } .m-POST { color: #d97706; } .m-PUT { color: #2563eb; } .m-PATCH { color: #7c3aed; } .m-DELETE { color: #dc2626; }
+    .summary-box { background: #f8fafc; border: 1px solid #e2e8f0; border-left: 3px solid #2563eb; border-radius: 6px; padding: 12px 14px; font-size: 11.5px; color: #334155; margin-bottom: 4px; }
+    .note { font-size: 10px; color: #94a3b8; margin-top: 6px; font-style: italic; }
+    .footer { margin-top: 26px; padding-top: 12px; border-top: 1px solid #e2e8f0; font-size: 9.5px; color: #94a3b8; line-height: 1.6; }
+  </style></head><body>
+    <div class="header">
+      <div>
+        <div class="brand">⚡ APIForge</div>
+        <div class="doc-title">API Performance Test Report</div>
+      </div>
+      <div class="header-right">
+        <b>${esc(perfState.col.name)}</b> &nbsp;·&nbsp; ${esc(perfState.envName)} env<br>
+        ${cfg.vus} virtual users · ${esc(profileLabel)}${esc(profileExtra)} profile · ${s.wallSec}s${esc(dataFileNote)}<br>
+        ${esc(fmtDateTime(r.startedAt))}
+      </div>
+    </div>
+
+    <div class="verdict-bar ${verdict.pass ? 'pass' : 'fail'}">
+      <span class="verdict-tag">${verdict.pass ? 'PASSED' : 'FAILED'}</span>
+      <span class="verdict-text">Threshold: <b>${metricLabel(cfg.threshold.metric)} ${condText} ${cfg.threshold.value}${metricUnit(cfg.threshold.metric)}</b> &nbsp;·&nbsp; Actual: <b>${verdict.actual}${metricUnit(cfg.threshold.metric)}</b></span>
+    </div>
+
+    <div class="stat-strip">
+      ${stat('Total Requests', s.totalRequests.toLocaleString())}
+      ${stat('Throughput', s.rps, 'req/sec')}
+      ${stat('Avg', s.avg + ' ms')}
+      ${stat('P90', s.p90 + ' ms')}
+      ${stat('P95', s.p95 + ' ms')}
+      ${stat('P99', s.p99 + ' ms')}
+      ${stat('Min / Max', s.min + ' / ' + s.max, 'ms')}
+      ${stat('Error Rate', s.errorRate + '%')}
+    </div>
+
+    <h2>Executive Summary</h2>
+    <div class="summary-box">${esc(perfInterpretation(s, verdict, cfg))}</div>
+
+    <h2>Metrics Over Time</h2>
+    ${combinedChart()}
+
+    <div class="two-col" style="margin-top:18px">
+      <div>
+        <h2 style="margin-top:0">Slowest Requests</h2>
+        <table class="grid"><thead><tr><th>#</th><th>Request</th><th class="num">Avg</th><th class="num">P95</th><th class="num">Max</th></tr></thead><tbody>${slowRows}</tbody></table>
+        <div class="note">Ranked by P95 latency (ms).</div>
+      </div>
+      <div>
+        <h2 style="margin-top:0">Requests With Most Errors</h2>
+        <table class="grid"><thead><tr><th>#</th><th>Request</th><th class="num">Errors</th><th class="num">Err%</th></tr></thead><tbody>${errReqRows}</tbody></table>
+      </div>
+    </div>
+
+    <h2>Metrics for Each Request</h2>
+    <table class="grid"><thead><tr>
+      <th>Request</th><th>Method</th><th class="num">Count</th><th class="num">Avg</th>
+      <th class="num">Min</th><th class="num">Max</th><th class="num">P90</th>
+      <th class="num">P95</th><th class="num">P99</th><th class="num">Err%</th>
+    </tr></thead><tbody>${prRows}</tbody></table>
+    <div class="note">All times in milliseconds. Rows ordered by P95 (slowest first). A one-time warm-up request per endpoint is excluded so cold-start latency (DNS, TCP, TLS) does not skew results.</div>
+
+    ${errClassBlock}
+
+    <div class="footer">
+      Generated by APIForge on ${esc(fmtDateTime(Date.now()))}. All requests were sent locally from the host machine, so reported throughput is bounded by local CPU and network capacity.<br>
+      Percentiles (P90/P95/P99) are computed across all successful requests. P95 = 95% of requests completed at or below this latency.
+    </div>
+  </body></html>`;
+}
+
+async function downloadPerfReport() {
+  if (!perfState || !perfState.result) { await dialogConfirm('No Results', 'Run a performance test first.'); return; }
+  const btn = document.getElementById('perfPdfBtn');
+  btn.disabled = true; btn.textContent = 'Generating…';
+  const html = buildPerfReportHtml();
+  const safe = perfState.col.name.replace(/[^\w-]+/g, '_');
+  const stamp = new Date(perfState.result.startedAt).toISOString().slice(0, 16).replace(/[:T]/g, '-');
+  const res = await window.api.savePdf({ html, suggestedName: `APIForge_Perf_${safe}_${stamp}.pdf` });
+  btn.disabled = false; btn.textContent = '⬇ Download PDF Report';
+  if (res && res.ok) await dialogConfirm('Report Saved', `Saved to:\n${esc(res.path)}`);
+  else if (!(res && res.canceled)) await dialogConfirm('Error', 'Could not generate PDF: ' + (res && res.error ? res.error : 'unknown'));
+}
+
 function render() {
   renderSidebar();
   renderTabBar();
@@ -1129,12 +1817,16 @@ function renderSidebar() {
     const c = document.createElement('div'); c.className = 'collection';
     const head = document.createElement('div'); head.className = 'collection-head';
     const testable = (col.requests || []).filter(r => r.test && r.test.hasBaseline).length;
+    const hasReqs = (col.requests || []).length > 0;
     head.innerHTML = `<span>📁</span><span class="collection-name">${escapeHtml(col.name)}</span>` +
+      (hasReqs ? `<span class="perf-btn" title="Run performance / load test">⚡ Perf</span>` : '') +
       (testable ? `<span class="run-tests-btn" title="Run all ${testable} regression test${testable>1?'s':''}">▶ Test</span>` : '') +
       `<span class="tiny-x">✕</span>`;
     head.querySelector('.tiny-x').onclick = async (e) => { e.stopPropagation(); if (await dialogConfirm('Delete Collection', `Delete "${escapeHtml(col.name)}" and all its requests?`)) { store.collections = store.collections.filter(x => x.id !== col.id); persist(); render(); } };
     const rtBtn = head.querySelector('.run-tests-btn');
     if (rtBtn) rtBtn.onclick = (e) => { e.stopPropagation(); runCollectionTests(col); };
+    const pfBtn = head.querySelector('.perf-btn');
+    if (pfBtn) pfBtn.onclick = (e) => { e.stopPropagation(); openPerfModal(col); };
     c.appendChild(head);
     (col.requests || []).forEach(r => {
       const rq = document.createElement('div'); rq.className = 'col-req';
@@ -1196,6 +1888,53 @@ document.getElementById('addEnvBtn').onclick = () => { store.environments.push({
 document.getElementById('closeCodeModal').onclick = () => document.getElementById('codeModal').classList.add('hidden');
 document.getElementById('closeSuiteModal').onclick = () => document.getElementById('suiteModal').classList.add('hidden');
 document.getElementById('suitePdfBtn').onclick = () => downloadPdfReport();
+document.getElementById('closePerfModal').onclick = async () => {
+  if (perfState && perfState.runId && !perfState.result) { await window.api.perfCancel(perfState.runId); }
+  document.getElementById('perfModal').classList.add('hidden');
+};
+document.getElementById('perfRunBtn').onclick = () => runPerfTest();
+document.getElementById('perfPdfBtn').onclick = () => downloadPerfReport();
+document.getElementById('perfStopBtn').onclick = async () => {
+  if (perfState && perfState.runId) await window.api.perfCancel(perfState.runId);
+  document.getElementById('perfStopBtn').style.display = 'none';
+};
+document.getElementById('perfRunAgainBtn').onclick = () => {
+  document.getElementById('perfConfig').classList.remove('hidden');
+  document.getElementById('perfResults').classList.add('hidden');
+  document.getElementById('perfRunAgainBtn').style.display = 'none';
+  document.getElementById('perfPdfBtn').style.display = 'none';
+  renderPerfSequence();
+};
+document.querySelectorAll('.perf-tab').forEach(b => b.onclick = () => switchPerfTab(b.dataset.ptab));
+document.getElementById('perfReqFilter').onchange = (e) => { perfState.reqFilter = e.target.value; renderPerfLive(true); };
+document.getElementById('perfRtMetric').onchange = (e) => { perfState.rtMetric = e.target.value; renderPerfLive(true); };
+// live preview wiring
+['perfProfile', 'perfVus', 'perfDuration', 'perfBaseLoad'].forEach(id => {
+  const el = document.getElementById(id);
+  if (el) { el.addEventListener('input', updatePerfProfileUI); el.addEventListener('change', updatePerfProfileUI); }
+});
+document.getElementById('perfMetric').addEventListener('change', updatePerfThresholdUnit);
+// data file
+document.getElementById('perfDataFileBtn').onclick = () => document.getElementById('perfDataFileInput').click();
+document.getElementById('perfDataFileInput').onchange = (e) => {
+  const file = e.target.files && e.target.files[0];
+  if (!file) return;
+  const reader = new FileReader();
+  reader.onload = () => {
+    try {
+      const rows = parsePerfDataFile(file.name, reader.result);
+      perfState.dataRows = rows;
+      perfState.dataFileName = file.name;
+      const cols = rows.length ? Object.keys(rows[0]).join(', ') : '';
+      document.getElementById('perfDataFileInfo').textContent = `${file.name} — ${rows.length} row${rows.length === 1 ? '' : 's'}${cols ? ' (' + cols + ')' : ''}`;
+      document.getElementById('perfDataMapping').style.display = rows.length ? '' : 'none';
+    } catch (err) {
+      perfState.dataRows = []; perfState.dataFileName = '';
+      document.getElementById('perfDataFileInfo').textContent = 'Could not parse file: ' + err.message;
+    }
+  };
+  reader.readAsText(file);
+};
 
 // ---------- Init ----------
 (async () => { await loadStore(); newTab(); })();

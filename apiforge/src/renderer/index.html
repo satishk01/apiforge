@@ -47,6 +47,145 @@
     </div>
   </div>
 
+  <!-- Performance test modal -->
+  <div id="perfModal" class="modal hidden">
+    <div class="modal-box modal-box-perf">
+      <div class="modal-head"><span id="perfTitle">Performance Test</span>
+        <div style="display:flex;gap:8px;align-items:center">
+          <button id="perfStopBtn" class="save-btn" style="display:none;padding:6px 14px">■ Stop</button>
+          <button id="perfRunAgainBtn" class="save-btn" style="display:none;padding:6px 14px">↻ Run Again</button>
+          <button id="perfPdfBtn" class="send-btn" style="display:none;padding:6px 14px">⬇ Download PDF Report</button>
+          <button id="closePerfModal">✕</button>
+        </div>
+      </div>
+      <div class="modal-body">
+        <!-- config -->
+        <div id="perfConfig" class="perf-config-wrap">
+          <div class="perf-setup-title">Set up your performance test</div>
+          <div class="perf-config">
+            <div class="perf-field"><label>Load Profile</label>
+              <select id="perfProfile">
+                <option value="fixed">Fixed</option>
+                <option value="rampup">Ramp Up</option>
+                <option value="spike">Spike</option>
+                <option value="peak">Peak</option>
+              </select>
+            </div>
+            <div class="perf-field"><label>Virtual Users</label><input id="perfVus" type="number" min="1" max="500" value="10"></div>
+            <div class="perf-field"><label>Test Duration</label>
+              <div class="perf-duration-row">
+                <input id="perfDuration" type="number" min="1" max="600" value="2">
+                <span class="perf-unit">mins</span>
+              </div>
+            </div>
+          </div>
+
+          <!-- live load preview -->
+          <div class="perf-preview">
+            <div id="perfPreviewChart" class="perf-preview-chart"></div>
+            <div id="perfPreviewDesc" class="perf-preview-desc"></div>
+            <div id="perfProfileField" class="perf-field perf-profile-field" style="display:none">
+              <label id="perfProfileFieldLabel">Base load</label>
+              <input id="perfBaseLoad" type="number" min="1" value="2">
+            </div>
+          </div>
+
+          <!-- data file -->
+          <div class="perf-field">
+            <label>Data File <span class="muted2">(optional — CSV or JSON, one row of variables per virtual user)</span></label>
+            <div class="perf-datafile-row">
+              <button id="perfDataFileBtn" class="save-btn">Select file</button>
+              <span id="perfDataFileInfo" class="muted2"></span>
+              <select id="perfDataMapping" style="display:none">
+                <option value="ordered">Ordered (VU n → row n)</option>
+                <option value="randomized">Randomized (random row per VU)</option>
+              </select>
+            </div>
+            <input id="perfDataFileInput" type="file" accept=".csv,.json" style="display:none">
+          </div>
+
+          <!-- pass threshold -->
+          <div class="perf-field perf-threshold">
+            <label>Pass test if</label>
+            <div class="perf-threshold-row">
+              <select id="perfMetric">
+                <option value="avg">Avg response time</option>
+                <option value="p90">p90</option>
+                <option value="p95">p95</option>
+                <option value="p99">p99</option>
+                <option value="errorRate">Error %</option>
+                <option value="rps">Requests/sec</option>
+              </select>
+              <select id="perfCondition">
+                <option value="lt">is below</option>
+                <option value="gt">is above</option>
+              </select>
+              <input id="perfThreshold" type="number" value="500" style="width:90px">
+              <span class="perf-unit" id="perfThresholdUnit">ms</span>
+            </div>
+          </div>
+
+          <div class="perf-seq">
+            <div class="perf-section-title">Run Sequence <span class="muted2">— drag to reorder, uncheck to skip. Each virtual user runs these in order, looping.</span></div>
+            <div id="perfSeqList" class="perf-seq-list"></div>
+          </div>
+          <button id="perfRunBtn" class="send-btn perf-run-btn">▶ Run Performance Test</button>
+        </div>
+
+        <!-- live results -->
+        <div id="perfResults" class="perf-results hidden">
+          <!-- summary header bar -->
+          <div class="perf-headbar" id="perfHeadbar"></div>
+          <div class="perf-verdict" id="perfVerdict"></div>
+
+          <!-- result tabs -->
+          <div class="perf-tabs">
+            <button class="perf-tab active" data-ptab="summary">Summary</button>
+            <button class="perf-tab" data-ptab="errors">Errors <span id="perfErrTabCount"></span></button>
+          </div>
+
+          <!-- SUMMARY TAB -->
+          <div id="perfTabSummary" class="perf-tab-content active">
+            <div class="perf-cards" id="perfCards"></div>
+
+            <div class="perf-graph-toolbar">
+              <div class="perf-graph-controls">
+                <label>Request:
+                  <select id="perfReqFilter"><option value="__all__">All requests</option></select>
+                </label>
+                <label>Response time:
+                  <select id="perfRtMetric">
+                    <option value="avg">Avg</option>
+                    <option value="min">Min</option>
+                    <option value="max">Max</option>
+                    <option value="p99">p99</option>
+                    <option value="p95">p95</option>
+                    <option value="p90">p90</option>
+                  </select>
+                </label>
+              </div>
+            </div>
+
+            <div class="perf-bigchart-box">
+              <div id="perfBigChart" class="perf-bigchart"></div>
+              <div id="perfLegend" class="perf-legend"></div>
+            </div>
+
+            <div class="perf-table-wrap">
+              <div class="perf-section-title">Metrics for Each Request</div>
+              <div id="perfTable"></div>
+            </div>
+          </div>
+
+          <!-- ERRORS TAB -->
+          <div id="perfTabErrors" class="perf-tab-content">
+            <div id="perfErrorsContent" class="perf-errors"></div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
   <!-- Regression suite (Run All) modal -->
   <div id="suiteModal" class="modal hidden">
     <div class="modal-box modal-box-wide">
