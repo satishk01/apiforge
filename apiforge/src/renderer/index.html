@@ -1,0 +1,98 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self';" />
+  <title>APIForge</title>
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <div id="app">
+    <!-- Sidebar -->
+    <aside id="sidebar">
+      <div class="brand">⚡ APIForge</div>
+      <div class="env-bar">
+        <select id="envSelect"><option value="">No Environment</option></select>
+        <button id="manageEnvBtn" title="Manage environments">⚙</button>
+      </div>
+      <div class="sidebar-tabs">
+        <button class="stab active" data-stab="collections">Collections</button>
+        <button class="stab" data-stab="history">History</button>
+      </div>
+      <div id="collectionsPanel" class="sidebar-panel">
+        <button id="newCollectionBtn" class="full-btn">+ New Collection</button>
+        <div id="collectionsList"></div>
+      </div>
+      <div id="historyPanel" class="sidebar-panel hidden">
+        <button id="clearHistoryBtn" class="full-btn">Clear History</button>
+        <div id="historyList"></div>
+      </div>
+    </aside>
+
+    <!-- Main -->
+    <main id="main">
+      <div id="tabBar"></div>
+      <div id="workspace"></div>
+    </main>
+  </div>
+
+  <!-- Environment modal -->
+  <div id="envModal" class="modal hidden">
+    <div class="modal-box">
+      <div class="modal-head"><span>Environments</span><button id="closeEnvModal">✕</button></div>
+      <div class="modal-body">
+        <div id="envEditorList"></div>
+        <button id="addEnvBtn" class="full-btn">+ New Environment</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Regression suite (Run All) modal -->
+  <div id="suiteModal" class="modal hidden">
+    <div class="modal-box modal-box-wide">
+      <div class="modal-head"><span id="suiteTitle">Regression Tests</span>
+        <div style="display:flex;gap:8px;align-items:center">
+          <button id="suitePdfBtn" class="send-btn" style="display:none;padding:6px 14px">⬇ Download PDF Report</button>
+          <button id="closeSuiteModal">✕</button>
+        </div>
+      </div>
+      <div class="modal-body">
+        <div class="suite-progress-track"><div id="suiteProgress" class="suite-progress-fill"></div></div>
+        <div id="suiteSummary" class="suite-summary"></div>
+        <div id="suiteList" class="suite-list"></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Generic dialog modal (prompt/confirm/select) -->
+  <div id="dialogModal" class="modal hidden">
+    <div class="modal-box">
+      <div class="modal-head"><span id="dialogTitle">Dialog</span><button id="dialogClose">✕</button></div>
+      <div class="modal-body">
+        <div id="dialogContent"></div>
+        <div class="dialog-actions">
+          <button id="dialogCancel" class="save-btn">Cancel</button>
+          <button id="dialogOk" class="send-btn">OK</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Code generation modal -->
+  <div id="codeModal" class="modal hidden">
+    <div class="modal-box modal-box-wide">
+      <div class="modal-head"><span>Generate Code</span><button id="closeCodeModal">✕</button></div>
+      <div class="modal-body">
+        <div class="code-toolbar">
+          <div id="codeLangBar" class="resp-tabs"></div>
+          <button id="copyCodeBtn" class="save-btn">Copy</button>
+        </div>
+        <div id="codeVariantBar" class="chip-bar"></div>
+        <pre id="codeOutput" class="code-output"></pre>
+      </div>
+    </div>
+  </div>
+
+  <script src="renderer.js"></script>
+</body>
+</html>

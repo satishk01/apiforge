@@ -1,0 +1,177 @@
+========================================
+  APIForge - Local Postman-like API Client
+  Electron + Node.js  |  Windows
+========================================
+
+WHAT THIS APP DOES
+------------------
+A locally-running desktop API client (like Postman) for testing HTTP/REST
+endpoints. Nothing leaves your machine; all data is stored locally.
+
+Features included:
+  - Request methods: GET, POST, PUT, PATCH, DELETE, HEAD, OPTIONS
+  - URL bar with query-param editor (auto key/value rows)
+  - Custom request headers (enable/disable per row)
+  - Request body: JSON, Form URL-Encoded, Raw (+ JSON "Beautify")
+  - Auth helpers: Bearer Token, Basic Auth, API Key header
+  - Response viewer: status code, time (ms), size (KB)
+  - JSON syntax highlighting + raw/headers view + Copy button
+  - Gzip / deflate / brotli response decompression handled automatically
+  - Multiple request tabs open at once
+  - Collections: save requests, organize, reopen, delete
+  - History: last 100 sent requests, click to reload
+  - Environments + variables: use {{varName}} anywhere in URL/headers/body/auth
+  - All data persisted locally to disk (survives restarts)
+
+
+PREREQUISITES
+-------------
+1. Node.js (v18 or newer) installed on Windows.
+   Check by opening Command Prompt / PowerShell and running:
+       node --version
+       npm --version
+   If missing, download the LTS installer from https://nodejs.org
+
+
+HOW TO RUN
+----------
+1. Unzip "apiforge.zip" to a folder, e.g.  C:\Users\<you>\apiforge
+
+2. Open PowerShell or Command Prompt in that folder:
+       cd C:\Users\<you>\apiforge
+
+3. Install dependencies (one time only - downloads Electron, ~200MB):
+       npm install
+
+4. Start the app:
+       npm start
+
+   The APIForge window should open.
+
+
+HOW TO TEST AN API ENDPOINT
+---------------------------
+1. In the method dropdown pick GET (or any method).
+2. Type a URL in the address bar. Try a free test endpoint:
+       https://jsonplaceholder.typicode.com/todos/1
+3. Click "Send".
+4. The response (with status, time, size) appears below, JSON highlighted.
+
+Try a POST:
+   - Method: POST
+   - URL:    https://jsonplaceholder.typicode.com/posts
+   - Body tab -> select "JSON" -> paste:
+         { "title": "hello", "body": "world", "userId": 1 }
+   - Send.
+
+Using environment variables:
+   - Click the gear (⚙) next to the environment dropdown.
+   - Add an environment, e.g. name "Local", variable key "base"
+     value "https://jsonplaceholder.typicode.com".
+   - Close the modal, select "Local" in the dropdown.
+   - Now use {{base}}/todos/1 in the URL bar.
+
+Saving requests:
+   - Click "Save" on any request to store it in a Collection
+     (sidebar, left). Click a saved request to reopen it in a new tab.
+
+
+
+REGRESSION TESTING (NEW)
+------------------------
+Goal: after a code change, re-test all your endpoints in seconds and see
+PASS/FAIL per endpoint.
+
+Concept: each saved request can have a "baseline" - a known-good response
+saved to disk. Running a test re-sends the request and compares the live
+response to the baseline. Match = PASS, difference = FAIL (with a field diff).
+
+One-time setup:
+  The first time you save a baseline you'll be asked to pick a folder where
+  baseline files are stored (one .json per request). You only do this once.
+
+Per endpoint:
+  1. Open/save a request to a collection (Save button, top-right).
+  2. Send it once and confirm the response is correct.
+  3. Open the "Tests" tab -> click "Save Current Response as Baseline".
+  4. (Optional) In "Ignore these fields", list fields that change every call
+     so they don't cause false failures. Examples:
+        id, createdAt, token, user.sessionId, items[*].timestamp, *.updatedAt
+     Wildcards:  *  matches any one segment;  [*]  matches any array index.
+     Leave empty for a strict exact match.
+  5. "Run This Test" checks just this endpoint.
+
+Run ALL (the regression sweep):
+  In the sidebar, each collection that has baselines shows a green "Test"
+  button next to its name. Click it to run every baseline-backed request in
+  that collection, one after another. You get a live progress bar and a
+  summary like "8 passed, 2 failed of 10", with an expandable field-level
+  diff for each failure.
+
+Typical workflow for a team:
+  - Build & save your 10 endpoints, save a baseline for each (green dot shows
+    which requests have one).
+  - Make code changes to your API.
+  - Click the collection's "Test" button -> instantly see which endpoints
+    still pass and which broke, and exactly which fields changed.
+
+Baseline files are plain JSON in the folder you chose, so they can be
+committed to git or shared with teammates.
+
+
+PDF TEST REPORT (NEW)
+---------------------
+After running a collection's tests (the green "Test" button), the results
+window shows a "Download PDF Report" button. Click it to save a clean,
+shareable PDF containing:
+  - A header with collection name, environment, run time, and duration
+  - An overall PASS/FAIL verdict
+  - Summary cards: total / passed / failed / skipped / pass-rate
+  - A per-endpoint results table (status, method, URL, response time)
+  - A "Failure Details" section with the exact field-level differences
+    (expected vs actual) for every failed endpoint
+You choose where to save the .pdf; it can be emailed or attached as-is.
+No extra software is needed - the PDF is produced by the app itself.
+
+WHERE YOUR DATA LIVES
+---------------------
+Collections, history, and environments are saved to:
+   C:\Users\<you>\AppData\Roaming\apiforge\apiforge-data\store.json
+(Delete that file to reset everything.)
+Baseline JSON files live in the folder you pick on first baseline save.
+
+
+PROJECT STRUCTURE (for adding features later)
+---------------------------------------------
+   package.json              - app metadata + scripts
+   src/main/main.js          - Electron main process; the HTTP request
+                               engine (Node http/https) + local storage IPC
+   src/main/preload.js       - secure bridge exposing window.api to the UI
+   src/renderer/index.html   - app shell / layout
+   src/renderer/styles.css   - all styling (dark theme)
+   src/renderer/renderer.js  - all UI logic, tabs, collections, env vars,
+                               request building, response rendering
+
+Common extension points:
+   - New auth type:       authEditor() + buildHeaders() in renderer.js
+   - New body type:       bodyEditor() + buildBody() in renderer.js
+   - Request scripting / tests: hook after sendRequest() in renderer.js
+   - Import/export:       add IPC handlers in main.js + buttons in renderer.js
+   - Actual request send happens in doRequest() in main.js
+
+
+PACKAGING TO A STANDALONE .EXE (optional, later)
+------------------------------------------------
+   npm install --save-dev electron-builder
+   then add to package.json scripts:  "dist": "electron-builder"
+   and run:  npm run dist
+(You can ask me to set this up fully when you're ready.)
+
+
+TROUBLESHOOTING
+---------------
+- "electron not recognized" / app won't start:
+      run  npm install  again inside the project folder.
+- Blank window: run  npm start -- --dev  to open DevTools and check console.
+- HTTPS sites with self-signed certs may fail; that's expected for safety.
+========================================
