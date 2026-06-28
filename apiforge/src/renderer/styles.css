@@ -192,8 +192,40 @@ body { font-family: 'Segoe UI', sans-serif; background: var(--bg); color: var(--
 .perf-seq-grip { color: var(--muted); cursor: grab; }
 .perf-seq-name { flex: 1; }
 .perf-seq-order { color: var(--muted); font-size: 11px; font-family: var(--mono); }
-.perf-headbar { background: var(--bg3); border: 1px solid var(--border); border-radius: 8px; padding: 10px 12px; margin-bottom: 10px; }
-.perf-hb-row { display: flex; gap: 16px; flex-wrap: wrap; align-items: center; }
+.perf-headbar { background: var(--bg3); border: 1px solid var(--border); border-radius: 8px; padding: 12px 14px; margin-bottom: 10px; }
+.perf-hb-top { display: flex; justify-content: space-between; align-items: center; margin-bottom: 4px; }
+.perf-hb-title { font-size: 15px; font-weight: 700; color: var(--text); display: flex; align-items: center; gap: 10px; }
+.perf-status-badge { font-size: 10px; font-weight: 700; padding: 2px 8px; border-radius: 4px; letter-spacing: 0.4px; }
+.perf-status-badge.inprogress { background: rgba(137,180,250,0.18); color: var(--accent); }
+.perf-status-badge.done { background: rgba(166,227,161,0.18); color: var(--green); }
+.perf-hb-remain { font-size: 12px; color: var(--accent); font-weight: 600; }
+.perf-hb-sub { display: flex; gap: 6px; flex-wrap: wrap; color: var(--muted); font-size: 12px; align-items: center; }
+/* Postman 8-metric strip */
+.perf-metric-strip { display: flex; background: var(--bg3); border: 1px solid var(--border); border-radius: 8px; overflow: hidden; margin-bottom: 18px; }
+.pm-cell { flex: 1; padding: 12px 12px; border-right: 1px solid var(--border); }
+.pm-cell:last-child { border-right: none; }
+.pm-l { font-size: 10px; color: var(--muted); margin-bottom: 6px; }
+.pm-v { font-size: 17px; font-weight: 700; color: var(--text); }
+.perf-graph-section { margin-bottom: 18px; }
+.perf-graph-toolbar { display: flex; justify-content: flex-end; gap: 10px; margin-bottom: 6px; }
+.perf-dd { background: var(--bg3); color: var(--text); border: 1px solid var(--border); border-radius: 6px; padding: 6px 10px; font-size: 12px; }
+.perf-bigchart-box { background: var(--bg3); border: 1px solid var(--border); border-radius: 8px; padding: 12px 14px; }
+.perf-bigchart { width: 100%; }
+.perf-legend { display: flex; gap: 22px; justify-content: center; margin-top: 8px; }
+.perf-legend-item { display: flex; align-items: center; gap: 7px; cursor: pointer; font-size: 12px; color: var(--text); user-select: none; }
+.perf-legend-item.off { opacity: 0.35; text-decoration: line-through; }
+.perf-legend-dot { width: 16px; height: 3px; border-radius: 2px; display: inline-block; }
+.perf-section-title { font-size: 13px; font-weight: 700; color: var(--text); margin-bottom: 10px; }
+/* Postman performance-details table */
+.perf-rtable { width: 100%; border-collapse: collapse; font-size: 12px; }
+.perf-rtable th { text-align: right; padding: 8px 10px; color: var(--muted); border-bottom: 1px solid var(--border); font-size: 11px; font-weight: 600; white-space: nowrap; }
+.perf-rtable th.pd-rank, .perf-rtable th:nth-child(2) { text-align: left; }
+.perf-rtable td { padding: 9px 10px; border-bottom: 1px solid var(--border); }
+.perf-rtable td.num { text-align: right; font-family: var(--mono); }
+.perf-rtable td.pd-rank { color: var(--muted); text-align: left; width: 28px; }
+.perf-rtable td.pd-req { font-weight: 500; }
+.perf-rtable td.err { color: var(--red); }
+.perf-rtable td.ok { color: var(--green); }
 .perf-verdict { margin-bottom: 14px; }
 .perf-running { color: var(--orange); font-weight: 600; }
 .perf-verdict-badge { padding: 4px 14px; border-radius: 12px; font-weight: 700; margin-right: 10px; }

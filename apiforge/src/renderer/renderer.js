@@ -765,10 +765,10 @@ let perfState = null;
 let perfTickHooked = false;
 
 const PERF_SERIES = [
-  { key: 'vus',     label: 'Virtual users',  color: '#a6e3a1', axis: 'count' },
-  { key: 'rps',     label: 'Requests/sec',   color: '#89b4fa', axis: 'rps' },
-  { key: 'rt',      label: 'Response time',  color: '#f9e2af', axis: 'ms' },
-  { key: 'errRate', label: 'Error %',        color: '#f38ba8', axis: 'pct' }
+  { key: 'rps',     label: 'Requests/second', color: '#E8A317', axis: 'rps' },
+  { key: 'rt',      label: 'Avg. response',   color: '#3B82F6', axis: 'ms' },
+  { key: 'errRate', label: 'Error %',         color: '#EF4444', axis: 'pct' },
+  { key: 'vus',     label: 'Virtual users',   color: '#CBD5E1', axis: 'count' }
 ];
 
 function openPerfModal(col) {
@@ -982,48 +982,92 @@ function perfChartData() {
     rt: source.map(t => (t[rtMetric] != null ? t[rtMetric] : t.avg)),
     errRate: source.map(t => t.errRate)
   };
-  const tAxis = source.map(t => t.t);
-  return { series, tAxis };
+  // x-axis uses wall-clock timestamps from the main 'ticks' (vusSource) so the
+  // axis labels show real time-of-day like Postman (07:39:29 ...)
+  const clocks = vusSource.map(t => t.clock);
+  return { series, clocks };
 }
 
-function multiLineChart(series, tAxis, visible, w, h) {
-  const pad = { l: 6, r: 6, t: 8, b: 16 };
+function fmtClock(ms) {
+  const d = new Date(ms);
+  const p = (n) => String(n).padStart(2, '0');
+  return `${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`;
+}
+function niceMax(v) {
+  if (v <= 0) return 10;
+  const pow = Math.pow(10, Math.floor(Math.log10(v)));
+  const n = v / pow;
+  const step = n <= 1 ? 1 : n <= 2 ? 2 : n <= 5 ? 5 : 10;
+  return step * pow;
+}
+
+// Postman-style multi-axis chart:
+//  - left axis: 0..100 for Error % and Virtual-users-as-% (grey)
+//  - right inner axis: response time (ms, blue)
+//  - right outer axis: throughput (req/s, orange)
+//  - x axis: wall-clock time
+function multiLineChart(series, clocks, visible, w, h) {
+  const pad = { l: 34, r: 84, t: 14, b: 24 };
   const innerW = w - pad.l - pad.r, innerH = h - pad.t - pad.b;
-  const active = PERF_SERIES.filter(s => visible[s.key]);
-  // normalize each series to its own max so all fit one panel
-  const maxes = {};
-  PERF_SERIES.forEach(s => { const arr = series[s.key] || []; maxes[s.key] = Math.max(1, ...arr); });
-  // error% always 0..100 scale
-  maxes.errRate = 100;
-  const n = Math.max(1, tAxis.length);
+  const n = Math.max(1, clocks.length);
   const xStep = n > 1 ? innerW / (n - 1) : 0;
-  let svg = `<svg viewBox="0 0 ${w} ${h}" preserveAspectRatio="none" style="width:100%;height:${h}px;display:block">`;
-  // gridlines
-  for (let g = 0; g <= 4; g++) {
-    const y = pad.t + (innerH / 4) * g;
-    svg += `<line x1="${pad.l}" y1="${y.toFixed(1)}" x2="${w - pad.r}" y2="${y.toFixed(1)}" stroke="var(--border)" stroke-width="0.5"/>`;
+  const x0 = pad.l, y0 = pad.t, yBot = pad.t + innerH;
+
+  // scales
+  const msMax = niceMax(Math.max(1, ...series.rt));
+  const rpsMax = niceMax(Math.max(1, ...series.rps));
+  const vuMax = Math.max(1, perfState.config ? perfState.config.vus : Math.max(1, ...series.vus));
+
+  const yPct = (v) => yBot - (v / 100) * innerH;      // 0..100 left
+  const yMs = (v) => yBot - (v / msMax) * innerH;     // ms right-inner
+  const yRps = (v) => yBot - (v / rpsMax) * innerH;   // rps right-outer
+  const yVu = (v) => yBot - (v / vuMax) * innerH;     // VUs shown on pct grid as own scale (grey)
+
+  const col = { rps: '#E8A317', rt: '#3B82F6', errRate: '#EF4444', vus: '#CBD5E1' };
+  const X = (i) => x0 + i * xStep;
+
+  let svg = `<svg viewBox="0 0 ${w} ${h}" style="width:100%;height:${h}px;display:block" font-family="Segoe UI, sans-serif">`;
+  // horizontal gridlines + left % axis
+  for (let g = 0; g <= 5; g++) {
+    const frac = g / 5;
+    const y = yBot - frac * innerH;
+    svg += `<line x1="${x0}" y1="${y.toFixed(1)}" x2="${x0 + innerW}" y2="${y.toFixed(1)}" stroke="#eceff4" stroke-width="1"/>`;
+    svg += `<text x="${x0 - 6}" y="${(y + 3).toFixed(1)}" font-size="9" fill="#EF4444" text-anchor="end">${Math.round(frac * 100)}</text>`;
   }
-  active.forEach(s => {
-    const arr = series[s.key] || [];
-    if (!arr.length) return;
-    const mx = maxes[s.key];
-    const pts = arr.map((v, i) => {
-      const x = pad.l + i * xStep;
-      const y = pad.t + innerH - (v / mx) * innerH;
-      return `${x.toFixed(1)},${y.toFixed(1)}`;
-    });
-    svg += `<polyline points="${pts.join(' ')}" fill="none" stroke="${s.color}" stroke-width="2"/>`;
-    // last-point dot
-    const last = pts[pts.length - 1].split(',');
-    svg += `<circle cx="${last[0]}" cy="${last[1]}" r="2.5" fill="${s.color}"/>`;
-  });
-  // x labels (start / mid / end seconds)
-  if (tAxis.length) {
-    const labels = [tAxis[0], tAxis[Math.floor(tAxis.length / 2)], tAxis[tAxis.length - 1]];
-    [0, 0.5, 1].forEach((f, i) => {
-      const x = pad.l + f * innerW;
-      svg += `<text x="${x.toFixed(1)}" y="${h - 3}" font-size="8" fill="var(--muted)" text-anchor="${i === 0 ? 'start' : i === 2 ? 'end' : 'middle'}">${labels[i]}s</text>`;
-    });
+  // left axis caption
+  svg += `<text x="${x0 - 28}" y="${y0 - 2}" font-size="9" fill="#EF4444">% 100</text>`;
+  // right-inner ms axis (blue) and right-outer rps axis (orange) labels
+  for (let g = 0; g <= 5; g++) {
+    const frac = g / 5;
+    const y = yBot - frac * innerH + 3;
+    svg += `<text x="${x0 + innerW + 6}" y="${y.toFixed(1)}" font-size="9" fill="#3B82F6">${Math.round(frac * msMax)}</text>`;
+    svg += `<text x="${x0 + innerW + 48}" y="${y.toFixed(1)}" font-size="9" fill="#E8A317">${Math.round(frac * rpsMax)}</text>`;
+  }
+  svg += `<text x="${x0 + innerW + 6}" y="${y0 - 2}" font-size="9" fill="#3B82F6">${msMax} ms</text>`;
+  svg += `<text x="${x0 + innerW + 48}" y="${y0 - 2}" font-size="9" fill="#E8A317">${rpsMax} req/s</text>`;
+
+  const line = (vals, yFn, color) => {
+    if (!vals.length) return '';
+    const pts = vals.map((v, i) => `${X(i).toFixed(1)},${yFn(v).toFixed(1)}`);
+    const lastPt = pts[pts.length - 1].split(',');
+    return `<polyline points="${pts.join(' ')}" fill="none" stroke="${color}" stroke-width="2"/>` +
+           `<circle cx="${lastPt[0]}" cy="${lastPt[1]}" r="2.5" fill="${color}"/>`;
+  };
+  // draw in Postman order: VUs (grey, back) -> rps -> rt -> err
+  if (visible.vus) svg += line(series.vus, yVu, col.vus);
+  if (visible.rps) svg += line(series.rps, yRps, col.rps);
+  if (visible.rt) svg += line(series.rt, yMs, col.rt);
+  if (visible.errRate) svg += line(series.errRate, yPct, col.errRate);
+
+  // x-axis clock labels (up to 6 evenly spaced)
+  if (clocks.length) {
+    const count = Math.min(6, clocks.length);
+    for (let k = 0; k < count; k++) {
+      const i = count > 1 ? Math.round(k * (clocks.length - 1) / (count - 1)) : 0;
+      const x = X(i);
+      const anchor = k === 0 ? 'start' : k === count - 1 ? 'end' : 'middle';
+      svg += `<text x="${x.toFixed(1)}" y="${h - 8}" font-size="9" fill="#94a3b8" text-anchor="${anchor}">${fmtClock(clocks[i])}</text>`;
+    }
   }
   svg += `</svg>`;
   return svg;
@@ -1034,21 +1078,11 @@ function renderPerfLegend() {
   const filter = perfState.reqFilter;
   const reqLast = (filter !== '__all__' && perfState.reqTicks[filter]) ? perfState.reqTicks[filter][perfState.reqTicks[filter].length - 1] || {} : last;
   const rtMetric = perfState.rtMetric;
-  const valFor = (key) => {
-    if (key === 'vus') return last.vus != null ? last.vus : 0;
-    if (key === 'rps') return reqLast.rps != null ? reqLast.rps : 0;
-    if (key === 'rt') return (reqLast[rtMetric] != null ? reqLast[rtMetric] : reqLast.avg) || 0;
-    if (key === 'errRate') return reqLast.errRate != null ? reqLast.errRate : 0;
-    return 0;
-  };
-  const unit = (key) => key === 'rt' ? ' ms' : (key === 'errRate' ? '%' : (key === 'rps' ? '/s' : ''));
   const legend = document.getElementById('perfLegend');
   legend.innerHTML = PERF_SERIES.map(s => {
     const on = perfState.visible[s.key];
-    const lbl = s.key === 'rt' ? `Response time (${rtMetric})` : s.label;
     return `<span class="perf-legend-item ${on ? '' : 'off'}" data-key="${s.key}">
-      <span class="perf-legend-dot" style="background:${s.color}"></span>${lbl}
-      <b style="color:${s.color}">${valFor(s.key)}${unit(s.key)}</b></span>`;
+      <span class="perf-legend-dot" style="background:${s.color}"></span>${s.label}</span>`;
   }).join('');
   legend.querySelectorAll('.perf-legend-item').forEach(el => {
     el.onclick = () => { const k = el.dataset.key; perfState.visible[k] = !perfState.visible[k]; renderPerfLive(true); };
@@ -1056,27 +1090,62 @@ function renderPerfLegend() {
 }
 
 function renderPerfLive(redrawLegend) {
-  const { series, tAxis } = perfChartData();
-  document.getElementById('perfBigChart').innerHTML = multiLineChart(series, tAxis, perfState.visible, 760, 260);
+  const { series, clocks } = perfChartData();
+  document.getElementById('perfBigChart').innerHTML = multiLineChart(series, clocks, perfState.visible, 900, 300);
   renderPerfLegend();
   const last = perfState.ticks[perfState.ticks.length - 1] || { t: 0, totalRequests: 0 };
-  const cfg = perfState.config || { durationSec: 0, profile: '' };
   document.getElementById('perfHeadbar').innerHTML = perfHeadbarHtml(last);
+  renderPerfStrip(last);
 }
 
 function perfHeadbarHtml(last) {
   const cfg = perfState.config || {};
+  const profileLabel = { fixed: 'Fixed', rampup: 'Ramp Up', spike: 'Spike', peak: 'Peak' }[cfg.profile] || cfg.profile;
+  const running = perfState.runId && !perfState.result;
   const started = perfState.startedAt ? fmtDateTime(perfState.startedAt) : '';
-  return `<div class="perf-hb-row">
-      <span><b>${escapeHtml(perfState.col.name)}</b></span>
-      <span class="muted2">Env: ${escapeHtml(perfState.envName || 'None')}</span>
-      <span class="muted2">VUs: ${cfg.vus}</span>
-      <span class="muted2">Profile: ${cfg.profile}</span>
-      <span class="muted2">Start: ${started}</span>
-      <span class="muted2">Elapsed: ${last.t || 0}s / ${cfg.durationSec}s</span>
-      <span class="muted2">Total requests: ${last.totalRequests || 0}</span>
+  const durMin = cfg.durationMin || Math.round((cfg.durationSec || 0) / 60);
+  const elapsed = last.t || 0;
+  const remain = Math.max(0, (cfg.durationSec || 0) - elapsed);
+  const remainTxt = remain >= 60 ? `${Math.ceil(remain / 60)} min left` : `${remain}s left`;
+  const badge = running
+    ? `<span class="perf-status-badge inprogress">IN PROGRESS</span>`
+    : (perfState.result ? `<span class="perf-status-badge done">COMPLETED</span>` : '');
+  return `<div class="perf-hb-top">
+      <div class="perf-hb-title">${escapeHtml(perfState.col.name)} ${badge}</div>
+      ${running ? `<div class="perf-hb-remain">${remainTxt}</div>` : ''}
+    </div>
+    <div class="perf-hb-sub">
+      <span>📁 ${escapeHtml(perfState.col.name)}</span>
+      <span>·</span><span>${cfg.vus} VUs</span>
+      <span>·</span><span>${escapeHtml(started)}${durMin ? ` (${durMin} min)` : ''}</span>
+      <span>·</span><span>${escapeHtml(profileLabel)} profile</span>
+      ${perfState.envName && perfState.envName !== 'None' ? `<span>·</span><span>${escapeHtml(perfState.envName)} env</span>` : ''}
     </div>`;
 }
+
+// Live 8-metric strip matching Postman's summary header
+function renderPerfStrip(last) {
+  const el = document.getElementById('perfCards');
+  if (!el) return;
+  // use final summary if available, else latest tick
+  const s = perfState.result ? perfState.result.summary : {
+    totalRequests: last.totalRequests || 0,
+    rps: last.rps || 0, avg: last.avg || 0,
+    p90: last.p90 || 0, p95: last.p95 || 0, p99: last.p99 || 0,
+    errorRate: last.errRate || 0, failureRate: 0
+  };
+  const cell = (label, val) => `<div class="pm-cell"><div class="pm-l">${label}</div><div class="pm-v">${val}</div></div>`;
+  el.innerHTML =
+    cell('Total requests sent', (s.totalRequests || 0).toLocaleString()) +
+    cell('Requests/second', (s.rps || 0).toFixed ? (s.rps).toFixed(2) : s.rps) +
+    cell('Avg. response time', (s.avg || 0) + ' ms') +
+    cell('P90', (s.p90 || 0) + ' ms') +
+    cell('P95', (s.p95 || 0) + ' ms') +
+    cell('P99', (s.p99 || 0) + ' ms') +
+    cell('Error %', (s.errorRate != null ? s.errorRate : 0).toFixed ? (s.errorRate).toFixed(2) : s.errorRate) +
+    cell('Failure %', (s.failureRate != null ? s.failureRate : 0).toFixed ? (s.failureRate).toFixed(2) : (s.failureRate || 0));
+}
+
 
 async function runPerfTest() {
   const col = perfState.col;
@@ -1160,15 +1229,7 @@ function renderPerfFinal(result, threshold) {
     `<span class="perf-verdict-badge ${verdict.pass ? 'pass' : 'fail'}">${verdict.pass ? '✓ PASSED' : '✗ FAILED'}</span>
      <span class="muted2">Condition: ${metricLabel(threshold.metric)} ${condText} ${threshold.value}${metricUnit(threshold.metric)} — actual ${verdict.actual}${metricUnit(threshold.metric)}</span>`;
 
-  const card = (n, l, cls) => `<div class="perf-card ${cls||''}"><div class="pn">${n}</div><div class="pl">${l}</div></div>`;
-  document.getElementById('perfCards').innerHTML =
-    card(s.totalRequests, 'Total Requests') +
-    card(s.rps, 'Requests/sec', 'blue') +
-    card(s.avg + ' ms', 'Avg Response') +
-    card(s.errorRate + '%', 'Error Rate', s.errorRate > 0 ? 'red' : 'green') +
-    card(s.min + ' ms', 'Min') + card(s.max + ' ms', 'Max') +
-    card(s.p90 + ' ms', 'p90') + card(s.p95 + ' ms', 'p95') + card(s.p99 + ' ms', 'p99');
-
+  renderPerfStrip({});  // strip uses result.summary when present
   renderPerfTable(result);
   renderPerfErrors(result);
   renderPerfLive(true);
@@ -1180,23 +1241,29 @@ function renderPerfFinal(result, threshold) {
   pdfBtn.style.display = ''; pdfBtn.disabled = false; pdfBtn.textContent = '⬇ Download PDF Report';
 }
 
+// Postman "Performance details for total duration" table
 function renderPerfTable(result) {
-  // sort: slowest first (by p95) to surface bottlenecks like Postman
-  const rows = [...result.perRequest].sort((a, b) => b.p95 - a.p95).map(r => `<tr>
-    <td class="pr-name">${escapeHtml(r.name)}</td>
-    <td><span class="req-method m-${r.method}">${r.method}</span></td>
+  const rows = [...result.perRequest].map((r, i) => `<tr>
+    <td class="pd-rank">${i + 1}</td>
+    <td class="pd-req"><span class="req-method m-${r.method}">${r.method}</span> ${escapeHtml(r.name)}</td>
     <td class="num">${r.count}</td>
+    <td class="num">${(r.count / Math.max(1, result.summary.wallSec)).toFixed(2)}</td>
+    <td class="num ${r.errorRate > 0 ? 'err' : 'ok'}">${(r.errorRate).toFixed(2)}</td>
+    <td class="num ok">${(r.failureRate != null ? r.failureRate : 0).toFixed(2)}</td>
     <td class="num">${r.avg}</td>
     <td class="num">${r.min}</td>
     <td class="num">${r.max}</td>
     <td class="num">${r.p90}</td>
     <td class="num">${r.p95}</td>
     <td class="num">${r.p99}</td>
-    <td class="num ${r.errorRate > 0 ? 'err' : ''}">${r.errorRate}%</td>
   </tr>`).join('');
   document.getElementById('perfTable').innerHTML =
     `<table class="perf-rtable"><thead><tr>
-      <th>Request</th><th>Method</th><th>Count</th><th>Avg</th><th>Min</th><th>Max</th><th>p90</th><th>p95</th><th>p99</th><th>Err%</th>
+      <th class="pd-rank">#</th><th>Request</th>
+      <th class="num">Total requests</th><th class="num">Requests/s</th>
+      <th class="num">Error %</th><th class="num">Failure %</th>
+      <th class="num">Resp. time (Avg ms)</th><th class="num">Min (ms)</th><th class="num">Max (ms)</th>
+      <th class="num">90th (ms)</th><th class="num">95th (ms)</th><th class="num">99th (ms)</th>
     </tr></thead><tbody>${rows}</tbody></table>`;
 }
 
@@ -1266,10 +1333,10 @@ function buildPerfReportHtml() {
     const innerW = w - pad.l - pad.r, innerH = h - pad.t - pad.b;
     const n = ticks.length, xStep = n > 1 ? innerW / (n - 1) : 0;
     const series = [
-      { key: 'rps', label: 'Requests/sec', color: '#2563eb', max: Math.max(1, ...ticks.map(t => t.rps)) },
-      { key: 'avg', label: 'Avg response (ms)', color: '#d97706', max: Math.max(1, ...ticks.map(t => t.avg)) },
+      { key: 'rps', label: 'Requests/sec', color: '#FF6C37', max: Math.max(1, ...ticks.map(t => t.rps)) },
+      { key: 'avg', label: 'Avg response (ms)', color: '#6b4fbb', max: Math.max(1, ...ticks.map(t => t.avg)) },
       { key: 'errRate', label: 'Error %', color: '#dc2626', max: 100 },
-      { key: 'vus', label: 'Virtual users', color: '#16a34a', max: cfg.vus }
+      { key: 'vus', label: 'Virtual users', color: '#0ea5e9', max: cfg.vus }
     ];
     let svg = `<svg viewBox="0 0 ${w} ${h}" style="width:100%;height:230px;display:block" preserveAspectRatio="none">`;
     // y gridlines + frame
@@ -1328,8 +1395,8 @@ function buildPerfReportHtml() {
   return `<!DOCTYPE html><html><head><meta charset="utf-8"><style>
     * { box-sizing: border-box; margin: 0; padding: 0; }
     body { font-family: -apple-system, 'Segoe UI', Roboto, Arial, sans-serif; color: #0f172a; padding: 34px 38px; font-size: 12px; line-height: 1.45; }
-    .header { display: flex; justify-content: space-between; align-items: flex-start; border-bottom: 2px solid #1e293b; padding-bottom: 16px; margin-bottom: 18px; }
-    .brand { color: #2563eb; font-size: 19px; font-weight: 800; letter-spacing: -0.3px; }
+    .header { display: flex; justify-content: space-between; align-items: flex-start; border-bottom: 3px solid #FF6C37; padding-bottom: 16px; margin-bottom: 18px; }
+    .brand { color: #FF6C37; font-size: 19px; font-weight: 800; letter-spacing: -0.3px; }
     .doc-title { font-size: 15px; font-weight: 600; color: #334155; margin-top: 2px; }
     .header-right { text-align: right; font-size: 10.5px; color: #64748b; line-height: 1.7; }
     .header-right b { color: #334155; }
@@ -1347,14 +1414,14 @@ function buildPerfReportHtml() {
     .stat-l { font-size: 9px; text-transform: uppercase; letter-spacing: 0.6px; color: #94a3b8; font-weight: 600; }
     .stat-v { font-size: 19px; font-weight: 800; color: #0f172a; margin-top: 3px; }
     .stat-s { font-size: 9px; color: #94a3b8; margin-top: 1px; }
-    h2 { font-size: 12.5px; font-weight: 700; color: #1e293b; text-transform: uppercase; letter-spacing: 0.4px; margin: 22px 0 10px; padding-bottom: 6px; border-bottom: 1px solid #e2e8f0; }
+    h2 { font-size: 12.5px; font-weight: 700; color: #1e293b; text-transform: uppercase; letter-spacing: 0.4px; margin: 22px 0 10px; padding-bottom: 6px; border-bottom: 2px solid #FF6C37; }
     .combo-chart { border: 1px solid #e2e8f0; border-radius: 10px; padding: 12px 14px 6px; }
     .combo-legend { display: flex; gap: 20px; justify-content: center; padding-top: 8px; }
     .lg { font-size: 10.5px; color: #475569; display: flex; align-items: center; gap: 6px; }
     .lg-dot { width: 14px; height: 3px; border-radius: 2px; }
     .two-col { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; }
     table.grid { width: 100%; border-collapse: collapse; border: 1px solid #e2e8f0; border-radius: 8px; overflow: hidden; }
-    table.grid thead th { background: #f8fafc; padding: 8px 10px; font-size: 9.5px; text-transform: uppercase; letter-spacing: 0.4px; color: #64748b; font-weight: 700; text-align: left; border-bottom: 1px solid #e2e8f0; }
+    table.grid thead th { background: #fff4f0; padding: 8px 10px; font-size: 9.5px; text-transform: uppercase; letter-spacing: 0.4px; color: #c2410c; font-weight: 700; text-align: left; border-bottom: 2px solid #FF6C37; }
     table.grid thead th.num { text-align: right; }
     table.grid td { padding: 7px 10px; border-bottom: 1px solid #f1f5f9; }
     table.grid tr.odd td { background: #fafbfc; }
@@ -1368,7 +1435,7 @@ function buildPerfReportHtml() {
     td.affected { color: #475569; font-size: 11px; }
     .method { font-weight: 700; font-size: 10px; }
     .m-GET { color: #16a34a; } .m-POST { color: #d97706; } .m-PUT { color: #2563eb; } .m-PATCH { color: #7c3aed; } .m-DELETE { color: #dc2626; }
-    .summary-box { background: #f8fafc; border: 1px solid #e2e8f0; border-left: 3px solid #2563eb; border-radius: 6px; padding: 12px 14px; font-size: 11.5px; color: #334155; margin-bottom: 4px; }
+    .summary-box { background: #fff7f4; border: 1px solid #ffe0d4; border-left: 3px solid #FF6C37; border-radius: 6px; padding: 12px 14px; font-size: 11.5px; color: #334155; margin-bottom: 4px; }
     .note { font-size: 10px; color: #94a3b8; margin-top: 6px; font-style: italic; }
     .footer { margin-top: 26px; padding-top: 12px; border-top: 1px solid #e2e8f0; font-size: 9.5px; color: #94a3b8; line-height: 1.6; }
   </style></head><body>

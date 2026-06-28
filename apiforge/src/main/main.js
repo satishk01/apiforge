@@ -262,10 +262,10 @@ async function runPerfTest(event, cfg) {
     });
     const sortedRecent = [...recent].sort((a, b) => a - b);
     const snap = {
-      t: tsec, vus: vcur.active, rps: +rps.toFixed(1), avg: +avg.toFixed(0),
+      t: tsec, clock: now, vus: vcur.active, rps: +rps.toFixed(1), avg: +avg.toFixed(0),
       min: sortedRecent.length ? sortedRecent[0] : 0, max: sortedRecent.length ? sortedRecent[sortedRecent.length - 1] : 0,
       p90: percentile(sortedRecent, 90), p95: percentile(sortedRecent, 95), p99: percentile(sortedRecent, 99),
-      errRate: +errRate.toFixed(1), totalRequests
+      errRate: +errRate.toFixed(1), failRate: 0, totalRequests
     };
     timeline.push(snap);
     try { event.sender.send('perf:tick', { runId, snap, perReqSnap }); } catch (e) {}
@@ -280,8 +280,9 @@ async function runPerfTest(event, cfg) {
   const finishedAt = Date.now();
   const wallSec = (finishedAt - startedAt) / 1000;
   const summary = {
-    totalRequests, totalErrors,
+    totalRequests, totalErrors, totalFailures: 0,
     errorRate: totalRequests ? +((totalErrors / totalRequests) * 100).toFixed(2) : 0,
+    failureRate: 0,
     rps: +(totalRequests / wallSec).toFixed(2),
     avg: sortedAll.length ? +(sortedAll.reduce((a, b) => a + b, 0) / sortedAll.length).toFixed(0) : 0,
     min: sortedAll.length ? sortedAll[0] : 0,
@@ -293,8 +294,9 @@ async function runPerfTest(event, cfg) {
     const s = [...a.times].sort((x, y) => x - y);
     return {
       id, name: a.name, method: a.method, url: a.url,
-      count: a.count, errors: a.errors,
+      count: a.count, errors: a.errors, failures: 0,
       errorRate: a.count ? +((a.errors / a.count) * 100).toFixed(2) : 0,
+      failureRate: 0,
       avg: s.length ? +(s.reduce((x, y) => x + y, 0) / s.length).toFixed(0) : 0,
       min: s.length ? s[0] : 0, max: s.length ? s[s.length - 1] : 0,
       p90: percentile(s, 90), p95: percentile(s, 95), p99: percentile(s, 99),

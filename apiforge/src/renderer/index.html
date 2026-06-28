@@ -146,33 +146,31 @@
 
           <!-- SUMMARY TAB -->
           <div id="perfTabSummary" class="perf-tab-content active">
-            <div class="perf-cards" id="perfCards"></div>
+            <div class="perf-metric-strip" id="perfCards"></div>
 
-            <div class="perf-graph-toolbar">
-              <div class="perf-graph-controls">
-                <label>Request:
-                  <select id="perfReqFilter"><option value="__all__">All requests</option></select>
-                </label>
-                <label>Response time:
-                  <select id="perfRtMetric">
-                    <option value="avg">Avg</option>
-                    <option value="min">Min</option>
-                    <option value="max">Max</option>
-                    <option value="p99">p99</option>
-                    <option value="p95">p95</option>
-                    <option value="p90">p90</option>
+            <div class="perf-graph-section">
+              <div class="perf-graph-toolbar">
+                <div class="perf-graph-controls">
+                  <select id="perfReqFilter" class="perf-dd"><option value="__all__">Filter by requests</option></select>
+                  <select id="perfRtMetric" class="perf-dd">
+                    <option value="avg">Avg. response</option>
+                    <option value="min">Min response</option>
+                    <option value="max">Max response</option>
+                    <option value="p99">99th percentile</option>
+                    <option value="p95">95th percentile</option>
+                    <option value="p90">90th percentile</option>
                   </select>
-                </label>
+                </div>
+              </div>
+
+              <div class="perf-bigchart-box">
+                <div id="perfBigChart" class="perf-bigchart"></div>
+                <div id="perfLegend" class="perf-legend"></div>
               </div>
             </div>
 
-            <div class="perf-bigchart-box">
-              <div id="perfBigChart" class="perf-bigchart"></div>
-              <div id="perfLegend" class="perf-legend"></div>
-            </div>
-
             <div class="perf-table-wrap">
-              <div class="perf-section-title">Metrics for Each Request</div>
+              <div class="perf-section-title">Performance details for total duration</div>
               <div id="perfTable"></div>
             </div>
           </div>
