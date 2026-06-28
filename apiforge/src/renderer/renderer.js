@@ -1869,6 +1869,205 @@ async function saveRequest(t) {
 }
 
 // ---------- Sidebar ----------
+// ============ COLLECTION EXPORT / IMPORT ============
+// Supports two formats: APIForge native JSON, and Postman Collection v2.1.
+// Export lets the user choose; import auto-detects.
+
+const APIFORGE_SCHEMA = 'apiforge-collection/v1';
+
+function toApiforgeJson(col) {
+  return JSON.stringify({
+    schema: APIFORGE_SCHEMA,
+    exportedAt: new Date().toISOString(),
+    collection: { id: col.id, name: col.name, requests: col.requests || [] }
+  }, null, 2);
+}
+
+function bodyToPostman(req) {
+  if (!req.bodyType || req.bodyType === 'none') return undefined;
+  if (req.bodyType === 'json') return { mode: 'raw', raw: req.body || '', options: { raw: { language: 'json' } } };
+  if (req.bodyType === 'raw') return { mode: 'raw', raw: req.body || '' };
+  if (req.bodyType === 'form') {
+    let pairs = [];
+    try { const o = JSON.parse(req.body || '{}'); pairs = Object.entries(o).map(([k, v]) => ({ key: k, value: String(v) })); }
+    catch { /* leave empty */ }
+    return { mode: 'urlencoded', urlencoded: pairs };
+  }
+  return undefined;
+}
+function authToPostman(req) {
+  const a = req.auth || {};
+  if (a.type === 'bearer') return { type: 'bearer', bearer: [{ key: 'token', value: a.token || '', type: 'string' }] };
+  if (a.type === 'basic') return { type: 'basic', basic: [{ key: 'username', value: a.username || '' }, { key: 'password', value: a.password || '' }] };
+  if (a.type === 'apikey') return { type: 'apikey', apikey: [{ key: 'key', value: a.key || '' }, { key: 'value', value: a.value || '' }, { key: 'in', value: 'header' }] };
+  return undefined;
+}
+function urlToPostman(req) {
+  const rawBase = req.url || '';
+  const enabledParams = (req.params || []).filter(p => p.key);
+  let raw = rawBase;
+  if (enabledParams.length) {
+    const qs = enabledParams.filter(p => p.enabled !== false).map(p => `${p.key}=${p.value}`).join('&');
+    if (qs) raw += (raw.includes('?') ? '&' : '?') + qs;
+  }
+  const obj = { raw };
+  try {
+    const u = new URL(rawBase.replace(/\{\{[^}]+\}\}/g, 'x'));
+    obj.protocol = u.protocol.replace(':', '');
+    obj.host = u.hostname.split('.');
+    obj.path = u.pathname.split('/').filter(Boolean);
+  } catch { /* templated url — raw only is fine */ }
+  if (enabledParams.length) {
+    obj.query = enabledParams.map(p => ({ key: p.key, value: p.value, disabled: p.enabled === false ? true : undefined }));
+  }
+  return obj;
+}
+function toPostmanJson(col) {
+  const items = (col.requests || []).map(r => {
+    const item = {
+      name: r.name || 'Request',
+      request: {
+        method: r.method || 'GET',
+        header: (r.headers || []).filter(h => h.key).map(h => ({ key: h.key, value: h.value, disabled: h.enabled === false ? true : undefined })),
+        url: urlToPostman(r)
+      }
+    };
+    const auth = authToPostman(r); if (auth) item.request.auth = auth;
+    const body = bodyToPostman(r); if (body) item.request.body = body;
+    if (r.test) item._apiforge = { test: r.test };
+    return item;
+  });
+  return JSON.stringify({
+    info: {
+      _postman_id: col.id || uid(),
+      name: col.name || 'Collection',
+      schema: 'https://schema.getpostman.com/json/collection/v2.1.0/collection.json'
+    },
+    item: items
+  }, null, 2);
+}
+
+function kvFromPostmanHeaders(headers) {
+  const rows = (headers || []).map(h => ({ key: h.key || '', value: h.value || '', enabled: !h.disabled }));
+  rows.push({ key: '', value: '', enabled: true });
+  return rows;
+}
+function paramsFromPostmanUrl(url) {
+  const q = (url && url.query) || [];
+  const rows = q.map(p => ({ key: p.key || '', value: p.value || '', enabled: !p.disabled }));
+  rows.push({ key: '', value: '', enabled: true });
+  return rows;
+}
+function urlStringFromPostman(url) {
+  if (!url) return '';
+  if (typeof url === 'string') return url.split('?')[0];
+  if (url.raw) return url.raw.split('?')[0];
+  const proto = url.protocol ? url.protocol + '://' : '';
+  const host = Array.isArray(url.host) ? url.host.join('.') : (url.host || '');
+  const path = Array.isArray(url.path) ? '/' + url.path.join('/') : (url.path || '');
+  return proto + host + path;
+}
+function bodyFromPostman(body) {
+  if (!body) return { bodyType: 'none', body: '' };
+  if (body.mode === 'raw') {
+    const lang = body.options && body.options.raw && body.options.raw.language;
+    return { bodyType: lang === 'json' ? 'json' : 'raw', body: body.raw || '' };
+  }
+  if (body.mode === 'urlencoded') {
+    const o = {}; (body.urlencoded || []).forEach(p => { if (p.key) o[p.key] = p.value; });
+    return { bodyType: 'form', body: JSON.stringify(o, null, 2) };
+  }
+  return { bodyType: 'none', body: '' };
+}
+function authFromPostman(auth) {
+  const base = { type: 'none', token: '', username: '', password: '', key: '', value: '' };
+  if (!auth) return base;
+  const grab = (arr, k) => { const f = (arr || []).find(x => x.key === k); return f ? f.value : ''; };
+  if (auth.type === 'bearer') return { ...base, type: 'bearer', token: grab(auth.bearer, 'token') };
+  if (auth.type === 'basic') return { ...base, type: 'basic', username: grab(auth.basic, 'username'), password: grab(auth.basic, 'password') };
+  if (auth.type === 'apikey') return { ...base, type: 'apikey', key: grab(auth.apikey, 'key'), value: grab(auth.apikey, 'value') };
+  return base;
+}
+function flattenPostmanItems(items, out) {
+  (items || []).forEach(it => {
+    if (it.item) { flattenPostmanItems(it.item, out); return; }
+    if (!it.request) return;
+    const rq = it.request;
+    const b = bodyFromPostman(rq.body);
+    out.push({
+      id: uid(),
+      name: it.name || 'Request',
+      method: (rq.method || 'GET').toUpperCase(),
+      url: urlStringFromPostman(rq.url),
+      params: paramsFromPostmanUrl(rq.url),
+      headers: kvFromPostmanHeaders(rq.header),
+      bodyType: b.bodyType, body: b.body,
+      auth: authFromPostman(rq.auth),
+      response: null,
+      test: (it._apiforge && it._apiforge.test) || { hasBaseline: false, ignoreFields: '', compareStatus: true, compareBody: true }
+    });
+  });
+}
+
+function parseImportedCollection(text) {
+  let data;
+  try { data = JSON.parse(text); } catch (e) { return { error: 'Not valid JSON: ' + e.message }; }
+  if (data && data.schema === APIFORGE_SCHEMA && data.collection) {
+    const c = data.collection;
+    return { name: c.name || 'Imported Collection', requests: (c.requests || []).map(r => ({ ...r, id: uid(), response: null, savedTo: undefined })) };
+  }
+  if (data && data.info && Array.isArray(data.item)) {
+    const out = [];
+    flattenPostmanItems(data.item, out);
+    return { name: (data.info.name) || 'Imported Collection', requests: out };
+  }
+  if (data && data.name && Array.isArray(data.requests)) {
+    const out = data.requests.map(r => ({
+      id: uid(), name: r.name || 'Request', method: (r.method || 'GET').toUpperCase(),
+      url: (typeof r.url === 'string' ? r.url : (r.url && r.url.raw) || '').split('?')[0], params: [{ key: '', value: '', enabled: true }],
+      headers: [{ key: '', value: '', enabled: true }], bodyType: 'none', body: '',
+      auth: { type: 'none', token: '', username: '', password: '', key: '', value: '' },
+      response: null, test: { hasBaseline: false, ignoreFields: '', compareStatus: true, compareBody: true }
+    }));
+    return { name: data.name, requests: out };
+  }
+  return { error: 'Unrecognized collection format (expected APIForge or Postman v2.1 JSON).' };
+}
+
+async function exportCollection(col) {
+  const choice = await dialogSelect('Export Collection',
+    [{ value: 'apiforge', label: 'APIForge format (keeps baselines & test config)' },
+     { value: 'postman', label: 'Postman v2.1 format (opens in Postman too)' }],
+    `Export "${escapeHtml(col.name)}" as:`);
+  if (choice === null) return;
+  const json = choice === 'postman' ? toPostmanJson(col) : toApiforgeJson(col);
+  const safe = (col.name || 'collection').replace(/[^\w-]+/g, '_');
+  const suffix = choice === 'postman' ? '.postman_collection.json' : '.apiforge.json';
+  const res = await window.api.exportCollection({ json, suggestedName: safe + suffix });
+  if (res && res.ok) await dialogConfirm('Exported', `Saved to:\n${escapeHtml(res.path)}`);
+  else if (!(res && res.canceled)) await dialogConfirm('Error', 'Export failed: ' + (res && res.error ? res.error : 'unknown'));
+}
+
+async function importCollections() {
+  const res = await window.api.importCollection();
+  if (!res || !res.ok) { if (res && !res.canceled) await dialogConfirm('Error', 'Import failed: ' + (res.error || 'unknown')); return; }
+  let added = 0; const problems = [];
+  for (const f of res.files) {
+    if (f.error) { problems.push(`${f.name}: ${f.error}`); continue; }
+    const parsed = parseImportedCollection(f.text);
+    if (parsed.error) { problems.push(`${f.name}: ${parsed.error}`); continue; }
+    let name = parsed.name;
+    const existing = store.collections.map(c => c.name);
+    if (existing.includes(name)) { let n = 2; while (existing.includes(`${name} (${n})`)) n++; name = `${name} (${n})`; }
+    store.collections.push({ id: uid(), name, requests: parsed.requests });
+    added++;
+  }
+  await persist(); render();
+  if (added && !problems.length) await dialogConfirm('Imported', `${added} collection${added > 1 ? 's' : ''} imported successfully.`);
+  else if (added && problems.length) await dialogConfirm('Imported with issues', `${added} imported.\n\nSkipped:\n${problems.join('\n')}`);
+  else await dialogConfirm('Import failed', problems.join('\n') || 'Nothing imported.');
+}
+
 function renderSidebar() {
   // env select
   const envSel = document.getElementById('envSelect');
@@ -1888,8 +2087,11 @@ function renderSidebar() {
     head.innerHTML = `<span>📁</span><span class="collection-name">${escapeHtml(col.name)}</span>` +
       (hasReqs ? `<span class="perf-btn" title="Run performance / load test">⚡ Perf</span>` : '') +
       (testable ? `<span class="run-tests-btn" title="Run all ${testable} regression test${testable>1?'s':''}">▶ Test</span>` : '') +
+      `<span class="export-col-btn" title="Export this collection">⬇</span>` +
       `<span class="tiny-x">✕</span>`;
     head.querySelector('.tiny-x').onclick = async (e) => { e.stopPropagation(); if (await dialogConfirm('Delete Collection', `Delete "${escapeHtml(col.name)}" and all its requests?`)) { store.collections = store.collections.filter(x => x.id !== col.id); persist(); render(); } };
+    const exBtn = head.querySelector('.export-col-btn');
+    if (exBtn) exBtn.onclick = (e) => { e.stopPropagation(); exportCollection(col); };
     const rtBtn = head.querySelector('.run-tests-btn');
     if (rtBtn) rtBtn.onclick = (e) => { e.stopPropagation(); runCollectionTests(col); };
     const pfBtn = head.querySelector('.perf-btn');
@@ -1947,6 +2149,7 @@ document.getElementById('newCollectionBtn').onclick = async () => {
   const n = await dialogPrompt('New Collection', 'New Collection', 'Collection name:'); if (!n) return;
   store.collections.push({ id: uid(), name: n, requests: [] }); persist(); render();
 };
+document.getElementById('importCollectionBtn').onclick = () => importCollections();
 document.getElementById('clearHistoryBtn').onclick = async () => { if (await dialogConfirm('Clear History', 'Remove all request history?')) { store.history = []; persist(); render(); } };
 document.getElementById('envSelect').onchange = (e) => { store.activeEnv = e.target.value || null; persist(); };
 document.getElementById('manageEnvBtn').onclick = () => { renderEnvModal(); document.getElementById('envModal').classList.remove('hidden'); };

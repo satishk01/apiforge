@@ -11,5 +11,7 @@ contextBridge.exposeInMainWorld('api', {
   savePdf: (args) => ipcRenderer.invoke('report:savePdf', args),
   perfRun: (cfg) => ipcRenderer.invoke('perf:run', cfg),
   perfCancel: (runId) => ipcRenderer.invoke('perf:cancel', runId),
-  onPerfTick: (cb) => { ipcRenderer.on('perf:tick', (_e, data) => cb(data)); }
+  onPerfTick: (cb) => { ipcRenderer.on('perf:tick', (_e, data) => cb(data)); },
+  exportCollection: (args) => ipcRenderer.invoke('collection:export', args),
+  importCollection: () => ipcRenderer.invoke('collection:import')
 });

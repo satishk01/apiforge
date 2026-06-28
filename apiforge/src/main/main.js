@@ -385,3 +385,33 @@ ipcMain.handle('report:savePdf', async (_e, { html, suggestedName }) => {
     pdfWin.destroy();
   }
 });
+
+// ---- Collection export / import ----
+ipcMain.handle('collection:export', async (_e, { json, suggestedName }) => {
+  try {
+    const res = await dialog.showSaveDialog({
+      title: 'Export Collection',
+      defaultPath: suggestedName || 'collection.json',
+      filters: [{ name: 'JSON', extensions: ['json'] }]
+    });
+    if (res.canceled || !res.filePath) return { ok: false, canceled: true };
+    fs.writeFileSync(res.filePath, json, 'utf8');
+    return { ok: true, path: res.filePath };
+  } catch (e) { return { ok: false, error: e.message }; }
+});
+
+ipcMain.handle('collection:import', async () => {
+  try {
+    const res = await dialog.showOpenDialog({
+      title: 'Import Collection',
+      properties: ['openFile', 'multiSelections'],
+      filters: [{ name: 'JSON', extensions: ['json'] }]
+    });
+    if (res.canceled || !res.filePaths.length) return { ok: false, canceled: true };
+    const files = res.filePaths.map(p => {
+      try { return { name: path.basename(p), text: fs.readFileSync(p, 'utf8') }; }
+      catch (e) { return { name: path.basename(p), error: e.message }; }
+    });
+    return { ok: true, files };
+  } catch (e) { return { ok: false, error: e.message }; }
+});

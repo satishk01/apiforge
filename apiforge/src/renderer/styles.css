@@ -142,6 +142,9 @@ body { font-family: 'Segoe UI', sans-serif; background: var(--bg); color: var(--
 
 /* sidebar test affordances */
 .run-tests-btn { font-size: 10px; font-weight: 700; color: var(--green); cursor: pointer; padding: 2px 6px; border: 1px solid var(--green); border-radius: 10px; margin-right: 4px; opacity: 0.85; }
+.export-col-btn { color: var(--muted); cursor: pointer; margin-right: 6px; opacity: 0; font-size: 13px; }
+.collection-head:hover .export-col-btn { opacity: 0.7; }
+.export-col-btn:hover { opacity: 1; color: var(--accent); }
 .run-tests-btn:hover { opacity: 1; background: rgba(166,227,161,0.1); }
 .bl-dot { color: var(--green); font-size: 9px; margin-right: 4px; }
 

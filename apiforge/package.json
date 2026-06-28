@@ -1,16 +1,65 @@
 {
   "name": "apiforge",
-  "version": "0.1.0",
+  "version": "1.0.0",
   "description": "A local Postman-like API client built with Electron + Node.js",
   "main": "src/main/main.js",
+  "author": "APIForge",
+  "license": "MIT",
   "scripts": {
     "start": "electron .",
-    "dev": "electron . --dev"
+    "dev": "electron . --dev",
+    "dist": "electron-builder",
+    "dist:win": "electron-builder --win",
+    "dist:portable": "electron-builder --win portable",
+    "pack": "electron-builder --dir"
   },
-  "author": "",
-  "license": "MIT",
   "devDependencies": {
-    "electron": "^31.0.0"
+    "electron": "^31.0.0",
+    "electron-builder": "^24.13.3"
   },
-  "dependencies": {}
+  "dependencies": {},
+  "build": {
+    "appId": "com.apiforge.app",
+    "productName": "APIForge",
+    "copyright": "Copyright © 2026 APIForge",
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "src/**/*",
+      "package.json"
+    ],
+    "win": {
+      "target": [
+        { "target": "nsis", "arch": ["x64"] },
+        { "target": "portable", "arch": ["x64"] }
+      ],
+      "icon": "build/icon.ico",
+      "artifactName": "${productName}-Setup-${version}.${ext}",
+      "signAndEditExecutable": false
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "APIForge",
+      "installerHeaderIcon": "build/icon.ico",
+      "uninstallDisplayName": "APIForge ${version}"
+    },
+    "portable": {
+      "artifactName": "${productName}-Portable-${version}.${ext}"
+    },
+    "mac": {
+      "target": ["dmg"],
+      "category": "public.app-category.developer-tools",
+      "icon": "build/icon.icns"
+    },
+    "linux": {
+      "target": ["AppImage"],
+      "category": "Development",
+      "icon": "build/icon.png"
+    }
+  }
 }
